@@ -595,7 +595,8 @@ fun PdfEditorScreen(state: AppState) {
                 .pointerInput(tool, current) {
                     awaitPointerEventScope {
                         while (true) {
-                            val down = awaitPointerEvent(PointerEventType.Press)
+                            var down = awaitPointerEvent()
+                            while (down.type != PointerEventType.Press) down = awaitPointerEvent()
                             val change = down.changes.firstOrNull() ?: continue
                             focusRequester.requestFocus()
                             val liveDims = dims[current] ?: (595.28f to 841.89f)
@@ -969,7 +970,8 @@ fun PdfEditorScreen(state: AppState) {
                                         .pointerInput(Unit) {
                                             awaitPointerEventScope {
                                                 while (true) {
-                                                    val down = awaitPointerEvent(PointerEventType.Press)
+                                                    var down = awaitPointerEvent()
+                            while (down.type != PointerEventType.Press) down = awaitPointerEvent()
                                                     val c0 = down.changes.firstOrNull() ?: continue
                                                     curStroke = listOf((c0.position.x / size.width) to (c0.position.y / size.height))
                                                     var done = false
