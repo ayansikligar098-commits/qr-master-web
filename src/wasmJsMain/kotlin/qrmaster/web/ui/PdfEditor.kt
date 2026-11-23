@@ -68,6 +68,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -137,6 +138,21 @@ private val ED_COLORS = listOf(
 private fun edHex(argb: Long): String =
     "#" + (argb and 0xFFFFFF).toString(16).uppercase().padStart(6, '0')
 
+/** Maps a shell/pdf.js failure to the honest message shown to the user. */
+private fun friendlyPdfError(raw: String?): String {
+    val m = (raw ?: "").trim()
+    return when {
+        m.contains("password", ignoreCase = true) ->
+            "This PDF is password-protected and can't be opened here. If you know the password, remove it first (for example, open the file in a PDF viewer and save or print it to a new PDF), then try again."
+        m.contains("timed out", ignoreCase = true) ->
+            "Rendering timed out — this file may be too heavy for the browser right now. Please try again."
+        m.contains("invalid", ignoreCase = true) || m.contains("corrupt", ignoreCase = true) ->
+            "This PDF couldn't be opened — the file appears to be corrupt or invalid."
+        m.isBlank() -> "Couldn't render this page. Please try again."
+        else -> m
+    }
+}
+
 private fun edTextBox(text: String, size: Float): Pair<Float, Float> {
     val lines = text.split("\n")
     val w = (lines.maxOfOrNull { it.length } ?: 0) * size * 0.56f + 10f
@@ -174,6 +190,7 @@ fun PdfEditorScreen(state: AppState) {
     var previews by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> dataUrl (1.6x)
     var thumbs by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var dims by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(emptyMap()) } // outPage -> displayed pts
+    var pageErrors by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> render error (never spin forever)
     var undoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
     var redoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
     var wmText by remember { mutableStateOf("") }
@@ -221,24 +238,36 @@ fun PdfEditorScreen(state: AppState) {
         if (current >= pages.size) current = max(0, pages.size - 1)
     }
 
-    suspend fun renderOutPage(idx: Int, forThumb: Boolean) {
-        val p = pages.getOrNull(idx) ?: return
-        val b64 = pdfB64 ?: return
+    suspend fun renderOutPage(idx: Int, forThumb: Boolean): Boolean {
+        val p = pages.getOrNull(idx) ?: return false
+        val b64 = pdfB64 ?: return false
         if (p.srcIndex < 0) {
             dims = dims + (idx to (595.28f to 841.89f))
-            return
+            return true
         }
         val scale = if (forThumb) 0.35 else 1.6
-        pdfOp("renderPage", buildJsonObject {
+        val res = pdfCall("renderPage", buildJsonObject {
             put("pdf", b64); put("page", p.srcIndex + 1); put("scale", scale); put("rotation", p.extraRotation)
-        }.toString())
-        val res = awaitAsync("pdf", 120_000) ?: return
-        if (!res.asyncOk()) return
+        }.toString(), 120_000)
+        if (res == null) {
+            pageErrors = pageErrors + (idx to friendlyPdfError("Rendering timed out"))
+            return false
+        }
+        if (!res.asyncOk()) {
+            pageErrors = pageErrors + (idx to friendlyPdfError(res.asyncError()))
+            return false
+        }
         val img = res.asyncStr("image")
-        val pw = res.asyncStr("pw").toFloatOrNull() ?: return
-        val ph = res.asyncStr("ph").toFloatOrNull() ?: return
+        val pw = res.asyncStr("pw").toFloatOrNull()
+        val ph = res.asyncStr("ph").toFloatOrNull()
+        if (pw == null || ph == null) {
+            pageErrors = pageErrors + (idx to friendlyPdfError(null))
+            return false
+        }
+        pageErrors = pageErrors - idx
         if (forThumb) thumbs = thumbs + (idx to img)
         else { previews = previews + (idx to img); dims = dims + (idx to (pw to ph)) }
+        return true
     }
 
     fun renderCurrent() { scope.launch { renderOutPage(current, false) } }
@@ -252,22 +281,36 @@ fun PdfEditorScreen(state: AppState) {
         if (libErr != null) { busy = false; errorText = libErr; return@LaunchedEffect }
         val b64 = loadFileBase64(f.id)
         if (b64 == null) { busy = false; errorText = "Could not read this file."; return@LaunchedEffect }
-        pdfOp("count", buildJsonObject { put("pdf", b64) }.toString())
-        val res = awaitAsync("pdf", 60_000)
-        busy = false
+        val res = pdfCall("count", buildJsonObject { put("pdf", b64) }.toString(), 60_000)
         if (res == null || !res.asyncOk()) {
-            errorText = res?.asyncError() ?: "Could not open this PDF. It may be corrupt or password-protected."
+            busy = false
+            errorText = if (res == null) "Opening timed out. Please try again."
+                else friendlyPdfError(res.asyncError())
             return@LaunchedEffect
         }
         val count = res.asyncStr("pages").toIntOrNull() ?: 0
-        if (count <= 0) { errorText = "This PDF has no pages."; return@LaunchedEffect }
+        if (count <= 0) { busy = false; errorText = "This PDF has no pages."; return@LaunchedEffect }
         pdfB64 = b64; fileName = f.name
         val capped = min(count, 50)
         pages = (0 until capped).map { EdPageState(srcIndex = it) }
         current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
-        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap()
+        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
+        // Gate on page 1 actually rendering. The pdf-lib page count above
+        // ignores encryption, so without this gate a password-protected
+        // (or otherwise unrenderable) file "opens" into a wall of endless
+        // spinners. On failure: show the real reason and go back to the
+        // file picker, usable for another file.
+        val firstOk = renderOutPage(0, false)
+        busy = false
+        if (!firstOk) {
+            val msg = pageErrors[0] ?: "Couldn't render this PDF."
+            pages = emptyList(); pdfB64 = null
+            previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
+            statusText = null
+            errorText = msg
+            return@LaunchedEffect
+        }
         statusText = if (count > 50) "Opened the first 50 of $count pages (editor limit)." else "Opened $count pages."
-        renderCurrent()
         for (i in 0 until capped) renderThumb(i)
     }
 
@@ -716,6 +759,16 @@ fun PdfEditorScreen(state: AppState) {
                 Text("Blank page", color = MutedText, fontSize = 13.sp, modifier = Modifier.align(Alignment.Center))
             } else if (previewBmp != null) {
                 Image(previewBmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+            } else if (pageErrors[current] != null) {
+                Column(
+                    Modifier.align(Alignment.Center).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(pageErrors[current]!!, color = Color(0xFFB91C1C), fontSize = 13.sp,
+                        textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = { renderCurrent(); renderThumb(current) }) { Text("Retry") }
+                }
             } else {
                 CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.align(Alignment.Center).size(22.dp))
             }
@@ -769,7 +822,7 @@ fun PdfEditorScreen(state: AppState) {
     fun afterStructureChange(newCurrent: Int) {
         current = newCurrent.coerceIn(0, max(0, pages.size - 1))
         selectedId = null
-        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap()
+        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
         renderCurrent()
         pages.indices.forEach { renderThumb(it) }
     }
@@ -874,6 +927,7 @@ fun PdfEditorScreen(state: AppState) {
                             ) {
                                 if (thumbBmp != null) Image(thumbBmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                                 else if (pg.srcIndex < 0) Text("Blank", fontSize = 10.sp, color = MutedText)
+                                else if (pageErrors[idx] != null) Text("!", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB91C1C))
                                 else CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(14.dp))
                             }
                             Text("${idx + 1}", fontSize = 11.sp, fontWeight = if (idx == current) FontWeight.Bold else FontWeight.Normal,

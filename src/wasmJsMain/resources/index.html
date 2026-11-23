@@ -177,8 +177,8 @@
     function qmSetAsync(key, obj) { window.__qmAsync[key] = JSON.stringify(obj); }
 
     // ── PDF operations (pdf-lib / pdf.js) ────────────────────────────────
-    window.__qmPdfOp = function (op, argsJson) {
-        var key = 'pdf';
+    window.__qmPdfOp = function (op, argsJson, key) {
+        key = key || 'pdf';
         window.__qmAsync[key] = '';
         (async function () {
             try {
@@ -239,8 +239,7 @@
                     qmSetAsync(key, { ok: true, pages: rp.pages, image: rp.image, pw: rp.pw, ph: rp.ph });
                 } else if (op === 'render') {
                     if (typeof pdfjsLib === 'undefined') throw new Error('PDF viewer library is still loading. Try again in a moment.');
-                    var task = pdfjsLib.getDocument({ data: qmB64ToBytes(args.pdf) });
-                    var pdf = await task.promise;
+                    var pdf = await qmGetJsDoc(args.pdf);
                     var n = Math.min(pdf.numPages, args.maxPages || 20);
                     var urls = [];
                     for (var k = 1; k <= n; k++) {
@@ -256,7 +255,7 @@
                     throw new Error('Unknown PDF operation.');
                 }
             } catch (e) {
-                qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+                qmSetAsync(key, { ok: false, error: qmErrText(e) });
             }
         })();
     };
@@ -700,15 +699,74 @@
         return true;
     }
 
-    async function qmEditorRenderPage(pdfB64, pageNum, scale, extraRotation) {
+    // Error text that keeps the pdf.js error NAME (e.g. PasswordException)
+    // so the UI can tell "password-protected" apart from other failures.
+    function qmErrText(e) {
+        if (!e) return 'Unknown error.';
+        var m = e.message ? e.message : ('' + e);
+        return (e.name && e.name !== 'Error') ? (e.name + ': ' + m) : m;
+    }
+    function qmWithTimeout(promise, ms, message) {
+        return Promise.race([
+            promise,
+            new Promise(function (resolve, reject) {
+                setTimeout(function () { reject(new Error(message)); }, ms);
+            })
+        ]);
+    }
+    // ONE parsed pdf.js document per PDF, shared by every page render.
+    // (Previously each render re-parsed the whole file in the shared
+    // worker — six parses for a five-page document — and a wedged load
+    // could hang a render forever: pdf.js has no load/render timeout.)
+    var __qmJsDocCache = { sig: '', promise: null };
+    function qmPdfSig(b64) { return b64.length + '#' + b64.slice(0, 40) + '#' + b64.slice(-40); }
+    function qmLoadJsDoc(pdfB64) {
         var task = pdfjsLib.getDocument({ data: qmB64ToBytes(pdfB64) });
-        var pdf = await task.promise;
+        return qmWithTimeout(task.promise, 45000, 'Timed out while opening this PDF.');
+    }
+    async function qmGetJsDoc(pdfB64) {
+        var sig = qmPdfSig(pdfB64);
+        if (__qmJsDocCache.sig === sig && __qmJsDocCache.promise) {
+            try { return await __qmJsDocCache.promise; }
+            catch (e) { __qmJsDocCache = { sig: '', promise: null }; throw e; }
+        }
+        if (__qmJsDocCache.promise) {
+            __qmJsDocCache.promise.then(function (d) { try { d.destroy(); } catch (e) {} }, function () {});
+            __qmJsDocCache = { sig: '', promise: null };
+        }
+        var attempt = qmLoadJsDoc(pdfB64);
+        __qmJsDocCache = { sig: sig, promise: attempt };
+        try {
+            return await attempt;
+        } catch (e) {
+            if (__qmJsDocCache.promise === attempt) __qmJsDocCache = { sig: '', promise: null };
+            // If the pdf.js worker could not start or wedged, retry once on
+            // the main thread (worker disabled). Password and corruption
+            // errors are NOT retried — they would fail identically; their
+            // original error (name included) propagates to the UI.
+            var msg = (e && e.message) ? e.message : ('' + e);
+            var passwordish = (e && e.name === 'PasswordException') || /password/i.test(msg);
+            if (!passwordish && typeof pdfjsLib !== 'undefined' && pdfjsLib.PDFWorkerUtil
+                && !pdfjsLib.PDFWorkerUtil.isWorkerDisabled) {
+                pdfjsLib.PDFWorkerUtil.isWorkerDisabled = true;
+                var retry = qmLoadJsDoc(pdfB64);
+                __qmJsDocCache = { sig: sig, promise: retry };
+                return await retry;
+            }
+            throw e;
+        }
+    }
+
+    async function qmEditorRenderPage(pdfB64, pageNum, scale, extraRotation) {
+        var pdf = await qmGetJsDoc(pdfB64);
         var pg = await pdf.getPage(pageNum);
         var total = (((pg.rotate || 0) + (extraRotation || 0)) % 360 + 360) % 360;
         var vp = pg.getViewport({ scale: scale, rotation: total });
         var cv = document.createElement('canvas');
         cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
-        await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+        await qmWithTimeout(
+            pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise,
+            60000, 'Timed out while rendering this page.');
         return { pages: pdf.numPages, image: cv.toDataURL('image/png'), pw: vp.width / scale, ph: vp.height / scale };
     }
 

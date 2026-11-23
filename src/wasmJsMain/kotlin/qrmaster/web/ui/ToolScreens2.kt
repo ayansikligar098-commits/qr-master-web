@@ -523,8 +523,7 @@ fun ScannerScreen(state: AppState) {
                                         var tries = 0
                                         while (pdfLibStatus() != "ready" && tries < 100) { delay(300); tries++ }
                                         val b64 = resultUrl!!.substringAfter(",", "")
-                                        pdfOp("imagesToPdf", "{\"images\":[{\"b64\":\"$b64\",\"mime\":\"image/png\"}]}")
-                                        val res = awaitAsync("pdf", 60_000)
+                                        val res = pdfCall("imagesToPdf", "{\"images\":[{\"b64\":\"$b64\",\"mime\":\"image/png\"}]}", 60_000)
                                         busy = false
                                         if (res != null && res.asyncOk()) {
                                             downloadFileBase64("scan.pdf", res.asyncStr("b64"), "application/pdf")

@@ -1163,8 +1163,7 @@ fun PdfConverterScreen(state: AppState) {
         scope.launch {
             val libErr = ensurePdfLibsReady()
             if (libErr != null) { busy = false; errorText = libErr; return@launch }
-            pdfOp(op, args)
-            val res = awaitAsync("pdf", 300_000)
+            val res = pdfCall(op, args, 300_000)
             busy = false
             when {
                 res == null -> errorText = "Processing timed out. Try a smaller file."
@@ -1179,8 +1178,7 @@ fun PdfConverterScreen(state: AppState) {
         scope.launch {
             if (ensurePdfLibsReady() != null) return@launch
             val b64 = loadFileBase64(f.id) ?: return@launch
-            pdfOp("count", "{\"pdf\":\"$b64\"}")
-            val res = awaitAsync("pdf", 60_000)
+            val res = pdfCall("count", "{\"pdf\":\"$b64\"}", 60_000)
             if (res != null && res.asyncOk()) pageCount = res.asyncStr("pages").toIntOrNull()
         }
     }
@@ -1306,8 +1304,7 @@ fun PdfConverterScreen(state: AppState) {
                                     busy = true
                                     if (ensurePdfLibsReady() != null) { busy = false; return@launch }
                                     val b = loadFileBase64(f.id) ?: run { busy = false; return@launch }
-                                    pdfOp("count", "{\"pdf\":\"$b\"}")
-                                    val r = awaitAsync("pdf", 60_000)
+                                    val r = pdfCall("count", "{\"pdf\":\"$b\"}", 60_000)
                                     busy = false
                                     r?.asyncStr("pages")?.toIntOrNull() ?: 0
                                 }

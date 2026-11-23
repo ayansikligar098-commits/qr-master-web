@@ -82,8 +82,8 @@ external fun loadPdfLibs()
 @JsFun("() => { return window.__qmLibStatus ? window.__qmLibStatus() : 'error:unavailable'; }")
 external fun pdfLibStatus(): String
 
-@JsFun("(op, argsJson) => { window.__qmPdfOp(op, argsJson); }")
-external fun pdfOp(op: String, argsJson: String)
+@JsFun("(op, argsJson, key) => { window.__qmPdfOp(op, argsJson, key); }")
+external fun pdfOp(op: String, argsJson: String, key: String)
 
 @JsFun("(op, argsJson) => { window.__qmImgOp(op, argsJson); }")
 external fun imgOp(op: String, argsJson: String)
@@ -178,6 +178,22 @@ suspend fun awaitAsync(key: String, timeoutMs: Long = 120_000): JsonObject? {
         waited += 150
     }
     return null
+}
+
+private var pdfCallSeq = 0
+
+/**
+ * Runs one shell PDF op on its OWN async slot and awaits its result.
+ * Every op used to share the single 'pdf' slot: concurrent calls (the
+ * PDF Editor fires a page render plus all thumbnail renders at once)
+ * reset and overwrote the slot under each other, so callers consumed
+ * another call's result — or none at all — and waited out the timeout.
+ */
+suspend fun pdfCall(op: String, argsJson: String, timeoutMs: Long = 120_000): JsonObject? {
+    pdfCallSeq += 1
+    val key = "pdf:$pdfCallSeq"
+    pdfOp(op, argsJson, key)
+    return awaitAsync(key, timeoutMs)
 }
 
 fun JsonObject.asyncOk(): Boolean =
