@@ -532,10 +532,24 @@ suspend fun EarnApi.myRequests(): List<MyRequest> {
 
 // ───────────────────────── Support tickets ─────────────────────────────────
 
-val SUPPORT_CATEGORIES = listOf(
-    "Bug", "Payment", "Refer", "Spin", "Task", "Bonus Code",
-    "Wallet-Withdraw", "Credits", "Notification", "Other"
+// Backend category KEY -> display label, exactly like the Android app.
+// Firestore rules only accept the lowercase keys ('bug', 'payment', ...);
+// sending the display label is rejected with PERMISSION_DENIED.
+val SUPPORT_CATEGORIES: List<Pair<String, String>> = listOf(
+    "bug" to "Bug",
+    "payment" to "Payment",
+    "refer" to "Referral",
+    "spin" to "Spin & Earn",
+    "task" to "Tasks",
+    "bonus" to "Bonus",
+    "wallet" to "Wallet",
+    "credits" to "Credits",
+    "notification" to "Notification",
+    "other" to "Other"
 )
+
+fun supportCategoryLabel(key: String): String =
+    SUPPORT_CATEGORIES.firstOrNull { it.first == key }?.second ?: "Other"
 
 data class SupportTicket(
     val id: String, val category: String, val message: String,

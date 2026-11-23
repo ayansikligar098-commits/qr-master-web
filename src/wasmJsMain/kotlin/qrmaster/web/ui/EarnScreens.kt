@@ -41,6 +41,7 @@ import kotlinx.browser.window
 import kotlinx.coroutines.launch
 import qrmaster.web.data.EarnApi
 import qrmaster.web.data.SUPPORT_CATEGORIES
+import qrmaster.web.data.supportCategoryLabel
 import qrmaster.web.data.SupportTicket
 import qrmaster.web.data.TicketReply
 import qrmaster.web.data.addTicketReply
@@ -297,7 +298,7 @@ fun InviteScreen(state: AppState) {
 @Composable
 fun SupportScreen(state: AppState) {
     val scope = rememberCoroutineScope()
-    var category by remember { mutableStateOf(SUPPORT_CATEGORIES[0]) }
+    var category by remember { mutableStateOf(SUPPORT_CATEGORIES[0].first) }
     var catIndex by remember { mutableStateOf(0) }
     var message by remember { mutableStateOf("") }
     var shotB64 by remember { mutableStateOf<String?>(null) }
@@ -340,8 +341,8 @@ fun SupportScreen(state: AppState) {
                             colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary)
                         ) { Text("Login") }
                     } else {
-                        LabeledDropdown("Category", SUPPORT_CATEGORIES, catIndex, {
-                            catIndex = it; category = SUPPORT_CATEGORIES[it]
+                        LabeledDropdown("Category", SUPPORT_CATEGORIES.map { it.second }, catIndex, {
+                            catIndex = it; category = SUPPORT_CATEGORIES[it].first
                         }, Modifier.fillMaxWidth())
                         OutlinedTextField(
                             value = message,
@@ -393,7 +394,7 @@ fun SupportScreen(state: AppState) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("${t.category} — ${t.message.take(48)}", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText, maxLines = 1)
+                            Text("${supportCategoryLabel(t.category)} — ${t.message.take(48)}", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText, maxLines = 1)
                             Text(fmtDateTime(t.createdAtMs), fontSize = 11.5.sp, color = MutedText)
                         }
                         Box(
@@ -425,7 +426,7 @@ fun SupportScreen(state: AppState) {
     if (t != null) {
         AlertDialog(
             onDismissRequest = { openTicket = null },
-            title = { Text("${t.category} Ticket") },
+            title = { Text("${supportCategoryLabel(t.category)} Ticket") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text(t.message, fontSize = 13.sp)
