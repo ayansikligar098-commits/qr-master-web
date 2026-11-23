@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://qrmaster-4ai.pages.dev/sitemap.xml
