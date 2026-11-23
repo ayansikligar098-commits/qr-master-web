@@ -39,8 +39,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tail -n 150 build.log > tail.log || echo "no log" > tail.log
-          gh issue create --title "Build failed (run ${{ github.run_number }})" --body-file tail.log || true
+          { echo "## Key errors"; grep -nE "error:|e: |What went wrong|FAILURE:|Caused by:" build.log | head -70; echo; echo "## Tail"; tail -n 50 build.log; } > report.md || echo "no log" > report.md
+          gh issue create --title "Build failed (run ${{ github.run_number }})" --body-file report.md || true
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
