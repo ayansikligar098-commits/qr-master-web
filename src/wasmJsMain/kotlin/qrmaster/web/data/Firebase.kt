@@ -193,19 +193,24 @@ object FirebaseApi {
                 expiresAtMs = nowMillis() + (o.str("expiresIn").toLongOrNull() ?: 3600L) * 1000L
             )
             persist(u)
-            // Create the profile document (same starter fields the Android app uses).
+            // Create the profile document EXACTLY like the Android app does:
+            // a plain profile (name / email / lastActive only). The Firestore
+            // rules reject client writes that touch protected money/premium
+            // fields, so wallet/credits/premium are never written here.
             try {
                 val fields = buildString {
                     append("{\"fields\":{")
                     append("\"name\":{\"stringValue\":${jsonStr(name)}},")
                     append("\"email\":{\"stringValue\":${jsonStr(email)}},")
-                    append("\"walletBalancePaise\":{\"integerValue\":\"0\"},")
-                    append("\"credits\":{\"integerValue\":\"5\"},")
-                    append("\"isPremium\":{\"booleanValue\":false}")
+                    append("\"lastActive\":{\"timestampValue\":\"${isoFromMs(nowMillis())}\"}")
                     append("}}")
                 }
-                httpRequest("PATCH", "$FS_BASE/users/${u.uid}", fields, u.idToken)
-            } catch (e: Exception) { /* profile doc may exist or rules may restrict; login stays valid */ }
+                httpRequest(
+                    "PATCH",
+                    "$FS_BASE/users/${u.uid}?updateMask.fieldPaths=name&updateMask.fieldPaths=email&updateMask.fieldPaths=lastActive",
+                    fields, u.idToken
+                )
+            } catch (e: Exception) { /* login stays valid even if the profile write is deferred */ }
             Result.success(u)
         } catch (e: Exception) {
             Result.failure(Exception(friendlyError(e)))
@@ -292,6 +297,32 @@ object FirebaseApi {
         val arr = f["arrayValue"]?.jsonObject?.get("values") as? JsonArray ?: return ""
         return arr.mapNotNull { (it as? JsonObject)?.get("stringValue")?.jsonPrimitive?.content }
             .joinToString("\n")
+    }
+
+    /** Epoch millis -> ISO-8601 UTC string (for timestampValue fields). */
+    private fun isoFromMs(ms: Long): String {
+        val days = floorDivLong(ms, 86400000L)
+        var rem = ms - days * 86400000L
+        val hh = rem / 3600000L; rem -= hh * 3600000L
+        val mm = rem / 60000L; rem -= mm * 60000L
+        val ss = rem / 1000L
+        val z = days + 719468L
+        val era = floorDivLong(z, 146097L)
+        val doe = z - era * 146097L
+        val yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
+        var y = yoe + era * 400L
+        val doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
+        val mp = (5L * doy + 2L) / 153L
+        val d = doy - (153L * mp + 2L) / 5L + 1L
+        val m = if (mp < 10L) mp + 3L else mp - 9L
+        if (m <= 2L) y += 1L
+        fun p2(v: Long) = v.toString().padStart(2, '0')
+        return "$y-${p2(m)}-${p2(d)}T${p2(hh)}:${p2(mm)}:${p2(ss)}.000Z"
+    }
+
+    private fun floorDivLong(a: Long, b: Long): Long {
+        val q = a / b
+        return if ((a % b != 0L) && ((a < 0) != (b < 0))) q - 1 else q
     }
 
     private fun parseIsoMs(iso: String): Long {

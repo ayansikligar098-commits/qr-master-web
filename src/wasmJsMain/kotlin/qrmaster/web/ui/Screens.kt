@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -188,7 +189,8 @@ fun QrCanvas(
     bg: Color?,
     style: PngEncoder.QrStyle,
     logo: ImageBitmap?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    multiColor: Boolean = false
 ) {
     Canvas(modifier) {
         val total = qr.size + 8
@@ -223,14 +225,17 @@ fun QrCanvas(
                 if (!qr.getModule(mx, my)) continue
                 val px = ox + (mx + 4) * cell
                 val py = oy + (my + 4) * cell
+                val modColor = if (multiColor && !isFinder(mx, my)) {
+                    HeroQrPalette[(mx * 31 + my * 17) % HeroQrPalette.size]
+                } else fg
                 when {
                     style == PngEncoder.QrStyle.SQUARE || isFinder(mx, my) ->
-                        drawRect(fg, topLeft = Offset(px, py), size = Size(cell + 0.6f, cell + 0.6f))
+                        drawRect(modColor, topLeft = Offset(px, py), size = Size(cell + 0.6f, cell + 0.6f))
                     style == PngEncoder.QrStyle.DOTS ->
-                        drawCircle(fg, radius = cell * 0.46f, center = Offset(px + cell / 2, py + cell / 2))
+                        drawCircle(modColor, radius = cell * 0.46f, center = Offset(px + cell / 2, py + cell / 2))
                     else ->
                         drawRoundRect(
-                            fg, topLeft = Offset(px, py), size = Size(cell + 0.4f, cell + 0.4f),
+                            modColor, topLeft = Offset(px, py), size = Size(cell + 0.4f, cell + 0.4f),
                             cornerRadius = CornerRadius(cell * 0.34f, cell * 0.34f)
                         )
                 }
@@ -283,6 +288,10 @@ fun homeTools(): List<ToolCardDef> = listOf(
     ToolCardDef("Percentage Calculator", "Calculator", "Calculators", IconKind.Percent, Color(0xFFC026D3)) { it.openPlaceholder("Percentage Calculator") }
 )
 
+val HeroQrPalette = listOf(
+    Color(0xFF6D28D9), Color(0xFF2563EB), Color(0xFF0D9488), Color(0xFF4F46E5), Color(0xFF7C3AED)
+)
+
 /* ---------------- 1) Home Dashboard (reference) ---------------- */
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -290,7 +299,7 @@ fun homeTools(): List<ToolCardDef> = listOf(
 fun DashboardScreen(state: AppState) {
     var chip by remember { mutableStateOf("All Tools") }
     val chips = listOf("All Tools", "PDF", "Calculators", "Productivity")
-    val tools = homeTools().filter { chip == "All Tools" || it.chip == chip }
+    val tools = homeTools().filter { chip == "All Tools" || it.chip == chip }.take(9)
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -322,11 +331,12 @@ fun DashboardScreen(state: AppState) {
                 tools.forEach { t -> HomeToolCard(t) { t.action(state) } }
                 // More Tools card (reference)
                 Column(
-                    Modifier.width(158.dp).height(126.dp)
+                    Modifier.width(216.dp).height(138.dp)
+                        .shadow(4.dp, RoundedCornerShape(16.dp))
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surface)
                         .clickable { state.navigate(Screen.AllTools) }
-                        .padding(12.dp),
+                        .padding(14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -349,23 +359,24 @@ fun DashboardScreen(state: AppState) {
 @Composable
 fun HomeToolCard(t: ToolCardDef, onClick: () -> Unit) {
     Column(
-        Modifier.width(158.dp).height(126.dp)
+        Modifier.width(216.dp).height(138.dp)
+            .shadow(4.dp, RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface)
             .clickable { onClick() }
-            .padding(12.dp),
+            .padding(14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Box(
-            Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(t.color),
+            Modifier.size(48.dp).clip(RoundedCornerShape(13.dp)).background(t.color),
             contentAlignment = Alignment.Center
         ) {
-            QrIcon(t.icon, Color.White, size = 23.dp)
+            QrIcon(t.icon, Color.White, size = 25.dp)
         }
-        Spacer(Modifier.height(9.dp))
-        Text(t.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = NavyText, maxLines = 1)
-        Text(t.categoryLabel, fontSize = 11.sp, color = MutedText, maxLines = 1)
+        Spacer(Modifier.height(10.dp))
+        Text(t.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = NavyText, maxLines = 1)
+        Text(t.categoryLabel, fontSize = 12.sp, color = MutedText, maxLines = 1)
     }
 }
 
@@ -380,7 +391,7 @@ fun HeroBanner(state: AppState) {
         Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
             .background(
                 Brush.horizontalGradient(
-                    listOf(Color(0xFFE3ECFF), Color(0xFFF0EAFE), Color(0xFFE7E4FF))
+                    listOf(Color(0xFFD7E7FF), Color(0xFFE6E1FF), Color(0xFFDACFFF))
                 )
             )
     ) {
@@ -390,8 +401,8 @@ fun HeroBanner(state: AppState) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1.5f)) {
-                Text("Everything You Need,", fontSize = 29.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF141433), lineHeight = 33.sp)
-                Text("All in One Place.", fontSize = 29.sp, fontWeight = FontWeight.ExtraBold, color = PurplePrimary, lineHeight = 33.sp)
+                Text("Everything You Need,", fontSize = 31.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF141433), lineHeight = 36.sp)
+                Text("All in One Place.", fontSize = 31.sp, fontWeight = FontWeight.ExtraBold, color = PurplePrimary, lineHeight = 36.sp)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Create QR Codes, Edit Photos, Manage PDFs and Access Powerful Tools in One Platform.",
@@ -433,31 +444,44 @@ fun HeroBanner(state: AppState) {
                 }
             }
             if (wide) {
-                Box(Modifier.weight(1f).height(168.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.weight(1f).height(208.dp), contentAlignment = Alignment.Center) {
+                    // saturated blue-purple glow behind the illustration (reference)
+                    Box(
+                        Modifier.size(330.dp).clip(CircleShape)
+                            .background(
+                                Brush.radialGradient(
+                                    listOf(Color(0x8C7C9CFF), Color(0x4D38BDF8), Color(0x006D28D9))
+                                )
+                            )
+                    )
                     // glowing platform
                     Box(
-                        Modifier.width(250.dp).height(52.dp).offset(y = 52.dp)
+                        Modifier.width(300.dp).height(58.dp).offset(y = 66.dp)
                             .clip(RoundedCornerShape(50))
                             .background(
                                 Brush.radialGradient(
-                                    listOf(Color(0x665B8CFF), Color(0x006D28D9))
+                                    listOf(Color(0x805B8CFF), Color(0x006D28D9))
                                 )
                             )
                     )
                     // floating chips
-                    FloatingChip(IconKind.Image, Color(0xFF16A34A), Modifier.align(Alignment.TopStart).offset(x = 26.dp, y = 6.dp))
-                    FloatingChip(IconKind.Play, Color(0xFF2563EB), Modifier.align(Alignment.TopEnd).offset(x = (-14).dp, y = 0.dp))
-                    FloatingChip(IconKind.Pdf, Color(0xFFE11D48), Modifier.align(Alignment.BottomEnd).offset(x = (-24).dp, y = (-8).dp))
-                    FloatingChip(IconKind.Music, Color(0xFF9333EA), Modifier.align(Alignment.BottomStart).offset(x = 44.dp, y = (-2).dp))
-                    // QR card (real, scannable)
+                    FloatingChip(IconKind.Image, Color(0xFF16A34A), Modifier.align(Alignment.TopStart).offset(x = 30.dp, y = 10.dp))
+                    FloatingChip(IconKind.Play, Color(0xFF2563EB), Modifier.align(Alignment.TopEnd).offset(x = (-16).dp, y = 2.dp))
+                    FloatingChip(IconKind.Pdf, Color(0xFFE11D48), Modifier.align(Alignment.BottomEnd).offset(x = (-26).dp, y = (-10).dp))
+                    FloatingChip(IconKind.Music, Color(0xFF9333EA), Modifier.align(Alignment.BottomStart).offset(x = 48.dp, y = (-4).dp))
+                    // QR card — large, tilted, multicolour modules (reference illustration)
                     Box(
-                        Modifier.rotate(-5f).width(132.dp).height(132.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                        Modifier.rotate(-6f).width(178.dp).height(178.dp)
+                            .shadow(14.dp, RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(Color.White)
-                            .padding(9.dp)
+                            .padding(11.dp)
                     ) {
                         if (heroQr != null) {
-                            QrCanvas(heroQr, Color(0xFF1E1B4B), Color.White, PngEncoder.QrStyle.SQUARE, null, Modifier.fillMaxSize())
+                            QrCanvas(
+                                heroQr, Color(0xFF312E81), Color.White, PngEncoder.QrStyle.SQUARE, null,
+                                Modifier.fillMaxSize(), multiColor = true
+                            )
                         }
                     }
                 }
@@ -469,10 +493,13 @@ fun HeroBanner(state: AppState) {
 @Composable
 fun FloatingChip(icon: IconKind, color: Color, modifier: Modifier) {
     Box(
-        modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(color),
+        modifier.size(46.dp)
+            .shadow(7.dp, RoundedCornerShape(13.dp))
+            .clip(RoundedCornerShape(13.dp))
+            .background(Color.White.copy(alpha = 0.96f)),
         contentAlignment = Alignment.Center
     ) {
-        QrIcon(icon, Color.White, size = 18.dp)
+        QrIcon(icon, color, size = 24.dp)
     }
 }
 
@@ -519,12 +546,21 @@ fun AllToolsScreen(state: AppState) {
         ToolCardDef("Currency Converter", "", "Converters", IconKind.Wallet, Color(0xFFCA8A04)) { it.openPlaceholder("Currency Converter") },
         ToolCardDef("Percentage Calculator", "", "Converters", IconKind.Percent, Color(0xFFC026D3)) { it.openPlaceholder("Percentage Calculator") }
     )
+    val earnTools = listOf(
+        ToolCardDef("Tasks & Earn", "", "More", IconKind.Task, Color(0xFFD97706)) { it.navigate(Screen.Tasks) },
+        ToolCardDef("Spin & Earn", "", "More", IconKind.Spin, Color(0xFF7C3AED)) { it.navigate(Screen.Spin) },
+        ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777)) { it.openPlaceholder("Bonus Code") }
+    )
     val sections = listOf(
         SectionDef("QR & Barcode Tools", "QR Tools", qrTools),
         SectionDef("PDF Tools", "PDF Tools", pdfTools),
         SectionDef("Image Tools", "Image Tools", imageTools),
-        SectionDef("Converters & Calculators", "Converters", converters)
+        SectionDef("Converters & Calculators", "Converters", converters),
+        SectionDef("Earn & Rewards", "More", earnTools)
     )
+    val anyVisible = sections
+        .filter { chip == "All Tools" || chip == "More" || it.chipKey == chip }
+        .any { sec -> sec.tools.any { query.isBlank() || it.name.contains(query, ignoreCase = true) } }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -559,6 +595,14 @@ fun AllToolsScreen(state: AppState) {
                 }
             }
         }
+        if (!anyVisible) {
+            item {
+                Text(
+                    "No tools found for \"$query\" — try another search.",
+                    fontSize = 13.5.sp, color = MutedText
+                )
+            }
+        }
         sections.filter { chip == "All Tools" || chip == "More" || it.chipKey == chip }.forEach { sec ->
             val visible = sec.tools.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
             if (visible.isNotEmpty()) {
@@ -582,7 +626,8 @@ fun AllToolsScreen(state: AppState) {
 @Composable
 fun AllToolCard(t: ToolCardDef, onClick: () -> Unit) {
     Column(
-        Modifier.width(128.dp).height(108.dp)
+        Modifier.width(200.dp).height(120.dp)
+            .shadow(3.dp, RoundedCornerShape(14.dp))
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surface)
             .clickable { onClick() }
@@ -597,7 +642,7 @@ fun AllToolCard(t: ToolCardDef, onClick: () -> Unit) {
             QrIcon(t.icon, t.color, size = 22.dp)
         }
         Spacer(Modifier.height(8.dp))
-        Text(t.name, fontWeight = FontWeight.Medium, fontSize = 12.sp, color = NavyText, maxLines = 2, textAlign = TextAlign.Center)
+        Text(t.name, fontWeight = FontWeight.Medium, fontSize = 12.5.sp, color = NavyText, maxLines = 2, lineHeight = 15.sp, textAlign = TextAlign.Center)
     }
 }
 
@@ -1181,6 +1226,13 @@ fun SpinScreen(state: AppState) {
                                     if (state.user == null) "Login to see your spins"
                                     else "Spins Left Today:  $spinsLeft / $totalSpins",
                                     fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText
+                                )
+                            }
+                            if (state.user != null && checkedIn) {
+                                Text(
+                                    "Checked in today — spins unlocked. Good luck!",
+                                    fontSize = 12.sp, color = Color(0xFF16A34A),
+                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 11.dp)
                                 )
                             }
                         }
