@@ -1,6 +1,7 @@
 package qrmaster.web.data
 
 import kotlinx.browser.window
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -197,20 +198,84 @@ object FirebaseApi {
             // a plain profile (name / email / lastActive only). The Firestore
             // rules reject client writes that touch protected money/premium
             // fields, so wallet/credits/premium are never written here.
-            try {
-                val fields = buildString {
-                    append("{\"fields\":{")
-                    append("\"name\":{\"stringValue\":${jsonStr(name)}},")
-                    append("\"email\":{\"stringValue\":${jsonStr(email)}},")
-                    append("\"lastActive\":{\"timestampValue\":\"${isoFromMs(nowMillis())}\"}")
-                    append("}}")
+            try { writePlainProfile(u, name, email) } catch (e: Exception) { /* login stays valid */ }
+            Result.success(u)
+        } catch (e: Exception) {
+            Result.failure(Exception(friendlyError(e)))
+        }
+    }
+
+    /**
+     * Writes ONLY the plain-profile fields (name / email / lastActive) with a
+     * field mask — the exact write the Android app's ProfileSync performs.
+     * Creates the document when missing; never touches protected fields.
+     */
+    private suspend fun writePlainProfile(u: WebUser, name: String, email: String) {
+        val fields = buildString {
+            append("{\"fields\":{")
+            append("\"name\":{\"stringValue\":${jsonStr(name)}},")
+            append("\"email\":{\"stringValue\":${jsonStr(email)}},")
+            append("\"lastActive\":{\"timestampValue\":\"${isoFromMs(nowMillis())}\"}")
+            append("}}")
+        }
+        httpRequest(
+            "PATCH",
+            "$FS_BASE/users/${u.uid}?updateMask.fieldPaths=name&updateMask.fieldPaths=email&updateMask.fieldPaths=lastActive",
+            fields, u.idToken
+        )
+    }
+
+    /**
+     * Google sign-in via the Firebase JS SDK popup (bridge in Platform.kt).
+     * Firebase itself creates the account for first-time Google users and
+     * signs existing users into the same account; afterwards the session is
+     * a normal WebUser handled by this REST layer.
+     */
+    suspend fun signInWithGoogle(): Result<WebUser> {
+        return try {
+            qrmaster.web.ui.startGoogleSignIn(
+                FirebaseConfig.API_KEY, FirebaseConfig.AUTH_DOMAIN, FirebaseConfig.PROJECT_ID
+            )
+            var outcome: JsonObject? = null
+            var waited = 0
+            while (waited < 240) {
+                delay(500)
+                val raw = qrmaster.web.ui.pollGoogleSignIn()
+                if (raw.isNotBlank()) {
+                    val o = json.parseToJsonElement(raw).jsonObject
+                    if (o.str("state") != "pending") { outcome = o; break }
                 }
-                httpRequest(
-                    "PATCH",
-                    "$FS_BASE/users/${u.uid}?updateMask.fieldPaths=name&updateMask.fieldPaths=email&updateMask.fieldPaths=lastActive",
-                    fields, u.idToken
+                waited++
+            }
+            val o = outcome ?: throw Exception("Google sign-in timed out. Please try again.")
+            if (o.str("state") == "error") {
+                val code = o.str("code")
+                throw Exception(
+                    when {
+                        code.contains("unauthorized-domain") ->
+                            "Google sign-in is not enabled for this website domain yet."
+                        code.contains("popup-closed") || code.contains("cancelled") ->
+                            "Google sign-in was cancelled."
+                        code.contains("popup-blocked") ->
+                            "Your browser blocked the Google popup. Please allow popups for this site and try again."
+                        else -> o.str("message").ifBlank { "Google sign-in failed. Please try again." }
+                    }
                 )
-            } catch (e: Exception) { /* login stays valid even if the profile write is deferred */ }
+            }
+            val u = WebUser(
+                uid = o.str("uid"),
+                email = o.str("email"),
+                idToken = o.str("idToken"),
+                refreshToken = o.str("refreshToken"),
+                expiresAtMs = nowMillis() + 3600_000L
+            )
+            persist(u)
+            // First-time Google users get their plain profile; for existing
+            // users this only refreshes name/email/lastActive (app parity).
+            try {
+                val gName = o.str("name").ifBlank { u.email.substringBefore("@") }
+                writePlainProfile(u, gName, u.email)
+            } catch (e: Exception) { /* session stays valid */ }
             Result.success(u)
         } catch (e: Exception) {
             Result.failure(Exception(friendlyError(e)))

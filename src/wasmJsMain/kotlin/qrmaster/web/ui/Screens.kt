@@ -2286,7 +2286,26 @@ fun LoginScreen(state: AppState) {
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var googleBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun googleSignIn() {
+        if (googleBusy || busy) return
+        error = null
+        googleBusy = true
+        scope.launch {
+            val r = FirebaseApi.signInWithGoogle()
+            googleBusy = false
+            r.onSuccess { u ->
+                state.onLoggedIn(u)
+                state.refreshProfile()
+                state.toast("Signed in with Google")
+                state.navigate(Screen.Dashboard)
+            }.onFailure {
+                error = it.message ?: "Google sign-in failed. Please try again."
+            }
+        }
+    }
 
     fun submit() {
         if (busy) return
@@ -2341,6 +2360,38 @@ fun LoginScreen(state: AppState) {
                             )
                         }
                     }
+                }
+                // Google sign-in (both tabs — label follows the tab)
+                OutlinedButton(
+                    onClick = { googleSignIn() },
+                    enabled = !googleBusy && !busy,
+                    shape = RoundedCornerShape(11.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                ) {
+                    if (googleBusy) {
+                        CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(19.dp))
+                    } else {
+                        Box(
+                            Modifier.size(24.dp).clip(CircleShape)
+                                .border(1.dp, Color(0xFFE2E2EF), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("G", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF4285F4))
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (isRegister) "Sign up with Google" else "Continue with Google",
+                            fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText
+                        )
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.weight(1f).height(1.dp).background(Color(0xFFE6E4F2)))
+                    Text("  or  ", fontSize = 12.sp, color = MutedText)
+                    Box(Modifier.weight(1f).height(1.dp).background(Color(0xFFE6E4F2)))
                 }
                 if (isRegister) {
                     OutlinedTextField(

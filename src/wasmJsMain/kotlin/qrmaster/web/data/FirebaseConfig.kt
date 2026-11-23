@@ -9,4 +9,5 @@ package qrmaster.web.data
 object FirebaseConfig {
     const val API_KEY = "AIzaSyDMdsrX5nc6fomIEoghncfESWXEBiNAa6M"
     const val PROJECT_ID = "link-to-qr-25307"
+    const val AUTH_DOMAIN = "link-to-qr-25307.firebaseapp.com"
 }

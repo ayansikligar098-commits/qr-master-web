@@ -79,3 +79,43 @@ external fun pickFile(accept: String, withData: Boolean): Int
     }"""
 )
 external fun pollPickedFile(id: Int): String
+
+/**
+ * Google sign-in bridge. Uses the Firebase JS SDK (loaded in index.html)
+ * ONLY for the Google popup flow; the returned identity is handed back as
+ * JSON and the rest of the session is handled by the REST layer, exactly
+ * like email/password sign-in. The popup opens synchronously inside the
+ * click handler, so browser popup blockers treat it as user-initiated.
+ */
+@JsFun(
+    """
+(apiKey, authDomain, projectId) => {
+  window.__qmGoogle = JSON.stringify({ state: 'pending' });
+  try {
+    if (typeof firebase === 'undefined') {
+      window.__qmGoogle = JSON.stringify({ state: 'error', message: 'Google sign-in is unavailable right now. Check your connection and try again.' });
+      return;
+    }
+    if (!window.__qmFbReady) {
+      firebase.initializeApp({ apiKey: apiKey, authDomain: authDomain, projectId: projectId });
+      window.__qmFbReady = true;
+    }
+    var provider = new firebase.auth.GoogleAuthProvider();
+    firebase.auth().signInWithPopup(provider).then(function(result) {
+      var user = result.user;
+      return user.getIdToken().then(function(tok) {
+        window.__qmGoogle = JSON.stringify({ state: 'ok', uid: user.uid, email: user.email || '', name: user.displayName || '', idToken: tok, refreshToken: user.refreshToken || '' });
+      });
+    }).catch(function(e) {
+      window.__qmGoogle = JSON.stringify({ state: 'error', message: (e && e.message) ? e.message : 'Google sign-in failed.', code: (e && e.code) ? e.code : '' });
+    });
+  } catch (e) {
+    window.__qmGoogle = JSON.stringify({ state: 'error', message: '' + e });
+  }
+}
+"""
+)
+external fun startGoogleSignIn(apiKey: String, authDomain: String, projectId: String)
+
+@JsFun("() => { return window.__qmGoogle || ''; }")
+external fun pollGoogleSignIn(): String
