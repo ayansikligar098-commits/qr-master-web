@@ -1636,6 +1636,7 @@ fun SpinScreen(state: AppState) {
 
 @Composable
 fun WalletScreen(state: AppState) {
+    val scope = rememberCoroutineScope()
     var history by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var showWithdraw by remember { mutableStateOf(false) }

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import qrmaster.web.data.nowMillis
 import kotlin.JsFun
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
