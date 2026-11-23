@@ -1639,6 +1639,8 @@ fun WalletScreen(state: AppState) {
     var history by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var showWithdraw by remember { mutableStateOf(false) }
+    var withdrawBusy by remember { mutableStateOf(false) }
+    var withdrawError by remember { mutableStateOf<String?>(null) }
     var upiId by remember { mutableStateOf("") }
 
     LaunchedEffect(state.user, state.profile) {
@@ -1726,6 +1728,19 @@ fun WalletScreen(state: AppState) {
                     }
                 }
             }
+            if (state.profile?.walletFrozen == true) {
+                item {
+                    WhiteCard(Modifier.fillMaxWidth()) {
+                        Text(
+                            "❄️ Your wallet is frozen" +
+                                (state.profile?.walletFreezeReason?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: "") +
+                                ". You can still withdraw, but earning is paused until it is unfrozen.",
+                            fontSize = 13.sp, color = Color(0xFFDC2626), fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(11.dp), modifier = Modifier.fillMaxWidth()) {
                     WalletAction("Add Money", IconKind.Download, Modifier.weight(1f)) { state.navigate(Screen.Premium) }
@@ -1808,14 +1823,34 @@ fun WalletScreen(state: AppState) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (withdrawError != null) {
+                        Text(withdrawError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
+                    }
                     Text(
-                        "Website withdrawals start with the full website build. For now, please withdraw from the QR Master Android app — your balance is the same.",
+                        "The request is verified by the admin and paid to this UPI ID. The same request appears in the Android app too.",
                         fontSize = 12.sp, color = MutedText
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showWithdraw = false }) { Text("OK") }
+                TextButton(
+                    onClick = {
+                        withdrawBusy = true
+                        withdrawError = null
+                        scope.launch {
+                            when (val r = EarnApi.withdraw(upiId)) {
+                                is qrmaster.web.data.SimpleOutcome.Ok -> {
+                                    showWithdraw = false
+                                    state.toast("Withdrawal request sent — payment after admin approval.")
+                                    state.refreshProfile()
+                                }
+                                is qrmaster.web.data.SimpleOutcome.Rejected -> withdrawError = r.message
+                            }
+                            withdrawBusy = false
+                        }
+                    },
+                    enabled = !withdrawBusy
+                ) { Text(if (withdrawBusy) "Sending…" else "Send Withdraw Request") }
             },
             dismissButton = {
                 TextButton(onClick = { showWithdraw = false }) { Text("Cancel") }
