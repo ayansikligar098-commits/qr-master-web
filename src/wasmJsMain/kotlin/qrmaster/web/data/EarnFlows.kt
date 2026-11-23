@@ -1,6 +1,7 @@
 package qrmaster.web.data
 
 import kotlinx.serialization.json.JsonObject
+import qrmaster.web.calc.Sha256
 import kotlin.math.roundToLong
 
 // ── Tasks / Withdraw / Premium / Support / Referral — faithful ports of the

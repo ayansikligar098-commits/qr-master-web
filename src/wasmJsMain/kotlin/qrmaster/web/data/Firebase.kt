@@ -112,6 +112,10 @@ object FirebaseApi {
         "https://firestore.googleapis.com/v1/projects/${FirebaseConfig.PROJECT_ID}/databases/(default)/documents"
 
     var session: WebUser? = null
+
+    /** Convenience accessors used by the earn engine. */
+    val uid: String? get() = session?.uid
+    fun currentEmail(): String? = session?.email
         private set
 
     init {
