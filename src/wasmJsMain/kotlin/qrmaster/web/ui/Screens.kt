@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +33,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -83,7 +87,18 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.launch
 import org.jetbrains.skia.Image as SkiaImage
+import qrmaster.web.data.EarnApi
 import qrmaster.web.data.FirebaseApi
+import qrmaster.web.data.applyCoupon
+import qrmaster.web.data.applyTask
+import qrmaster.web.data.claimAutoTask
+import qrmaster.web.data.loadTasks
+import qrmaster.web.data.markLinkOpened
+import qrmaster.web.data.myRequests
+import qrmaster.web.data.submitCreditRequest
+import qrmaster.web.data.submitPlanRequest
+import qrmaster.web.data.submitTaskProof
+import qrmaster.web.data.withdraw
 import qrmaster.web.data.HistoryItem
 import qrmaster.web.data.Profile
 import qrmaster.web.data.TaskItem
@@ -998,7 +1013,7 @@ private suspend fun ensurePdfLibsReady(): String? {
 }
 
 private fun parsePageRange(input: String, total: Int): List<Int> {
-    val out = sortedSetOf<Int>()
+    val out = mutableSetOf<Int>()
     for (part in input.split(",")) {
         val p = part.trim()
         if (p.isEmpty()) continue
@@ -1011,7 +1026,7 @@ private fun parsePageRange(input: String, total: Int): List<Int> {
             if (n in 1..total) out.add(n)
         }
     }
-    return out.toList()
+    return out.toList().sorted()
 }
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -1301,7 +1316,7 @@ fun PdfConverterScreen(state: AppState) {
     }
 }
 
-/* ---------------- 5) Spin & Earn (Android app wheel) ---------------- */
+/* ---------------- 5) Spin & Earn (Android app wheel, real engine) ---------------- */
 
 val SpinSegmentLabels = listOf("₹1", "₹2", "₹5", "₹10", "₹15", "₹20", "BLNT", "JACKPOT")
 val SpinSegmentColors = listOf(
@@ -1312,20 +1327,26 @@ val SpinSegmentColors = listOf(
 @Composable
 fun SpinScreen(state: AppState) {
     val scope = rememberCoroutineScope()
-    val profile = state.profile
     val rotation = remember { Animatable(0f) }
+    var snapshot by remember { mutableStateOf<qrmaster.web.data.EarnSnapshot?>(null) }
+    var snapLoading by remember { mutableStateOf(false) }
     var spinning by remember { mutableStateOf(false) }
     var resultText by remember { mutableStateOf<String?>(null) }
     var checkingIn by remember { mutableStateOf(false) }
     val textMeasurer = rememberTextMeasurer()
 
-    val today = todayIst()
-    val checkedIn = profile != null && profile.checkinDate == today
-    val baseLimit = if (profile?.isPremium == true) 10L else 3L
-    val usedToday = if (profile != null && profile.spinDate == today) profile.spinUsedToday else 0L
-    val totalSpins = baseLimit + (profile?.giftSpins ?: 0L) + (profile?.notifSpins ?: 0L)
-    val usedTotal = usedToday + (profile?.giftSpinsUsed ?: 0L) + (profile?.notifSpinsUsed ?: 0L)
-    val spinsLeft = maxOf(0L, totalSpins - usedTotal - (profile?.spinDebt ?: 0L))
+    suspend fun reloadSnapshot() {
+        snapLoading = true
+        snapshot = try { EarnApi.loadSnapshot() } catch (e: Exception) { null }
+        snapLoading = false
+    }
+    LaunchedEffect(state.user) {
+        if (state.user != null) reloadSnapshot()
+    }
+
+    val snap = snapshot
+    val checkedIn = snap?.checkedIn == true
+    val spinsLeft = snap?.spinsLeft ?: 0
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -1353,7 +1374,6 @@ fun SpinScreen(state: AppState) {
                                 val cx = size.width / 2f
                                 val cy = size.height / 2f
                                 val radius = size.minDimension / 2f - 6f
-                                // gold rim
                                 drawCircle(Color(0xFFF59E0B), radius = radius + 3f, center = Offset(cx, cy))
                                 drawCircle(Color(0xFFFFF7E0), radius = radius, center = Offset(cx, cy))
                                 for (i in 0 until 8) {
@@ -1366,7 +1386,6 @@ fun SpinScreen(state: AppState) {
                                         size = Size((radius - 4f) * 2, (radius - 4f) * 2)
                                     )
                                 }
-                                // labels — app convention: rotate from 12 o'clock to segment centre
                                 for (i in 0 until 8) {
                                     val label = SpinSegmentLabels[i]
                                     val layout = textMeasurer.measure(
@@ -1386,12 +1405,10 @@ fun SpinScreen(state: AppState) {
                                         )
                                     }
                                 }
-                                // hub
                                 drawCircle(PurplePrimary, radius = 34f, center = Offset(cx, cy))
                                 drawCircle(Color.White, radius = 34f, center = Offset(cx, cy), style = Stroke(width = 3f))
                             }
                             Text("SPIN", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                            // pointer at top
                             Canvas(Modifier.size(26.dp).align(Alignment.TopCenter).offset(y = (-2).dp)) {
                                 val path = androidx.compose.ui.graphics.Path()
                                 path.moveTo(size.width / 2f, size.height)
@@ -1417,17 +1434,33 @@ fun SpinScreen(state: AppState) {
                                 QrIcon(IconKind.Check, PurplePrimary, size = 18.dp)
                                 Spacer(Modifier.width(9.dp))
                                 Text(
-                                    if (state.user == null) "Login to see your spins"
-                                    else "Spins Left Today:  $spinsLeft / $totalSpins",
+                                    when {
+                                        state.user == null -> "Login to see your spins"
+                                        snapLoading && snap == null -> "Loading your spins…"
+                                        snap == null -> "Could not load — pull the page again"
+                                        else -> "Spins Left Today:  $spinsLeft"
+                                    },
                                     fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText
                                 )
                             }
-                            if (state.user != null && checkedIn) {
+                            if (snap != null) {
+                                val dailyTotal = if (snap.premium) snap.cfg.spin.dailyPremium else snap.cfg.spin.dailyFree
                                 Text(
-                                    "Checked in today — spins unlocked. Good luck!",
-                                    fontSize = 12.sp, color = Color(0xFF16A34A),
-                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 11.dp)
+                                    "Daily spins: ${snap.dailyLeft} of $dailyTotal" +
+                                        (if (snap.giftSpins > 0) "  •  Gift spins: ${snap.giftSpins}" else "") +
+                                        (if (snap.user.checkinStreak > 0) "  •  Streak: ${snap.user.checkinStreak} day(s)" else ""),
+                                    fontSize = 12.sp, color = MutedText,
+                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
                                 )
+                                if (snap.extraGranted > 0) {
+                                    Text(
+                                        "Notification bonus spins (${snap.extraGranted}) are spent in the Android app — they follow your phone's notification setting.",
+                                        fontSize = 11.5.sp, color = MutedText,
+                                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 11.dp)
+                                    )
+                                } else {
+                                    Spacer(Modifier.height(5.dp))
+                                }
                             }
                         }
                         when {
@@ -1439,19 +1472,43 @@ fun SpinScreen(state: AppState) {
                                     modifier = Modifier.fillMaxWidth().height(46.dp)
                                 ) { Text("Login to Spin", fontWeight = FontWeight.SemiBold) }
                             }
+                            snap?.cfg?.earnPaused == true -> {
+                                Text(
+                                    qrmaster.web.data.PAUSED_MSG,
+                                    fontSize = 13.sp, color = Color(0xFFB45309), fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            snap?.user?.walletFrozen == true -> {
+                                Text(
+                                    "❄️ Your wallet is frozen" +
+                                        (snap?.user?.walletFreezeReason?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: "") +
+                                        ". Earning is paused until it is unfrozen.",
+                                    fontSize = 13.sp, color = Color(0xFFDC2626), fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            snap?.earnBanned == true -> {
+                                Text(
+                                    qrmaster.web.data.BAN_MSG,
+                                    fontSize = 13.sp, color = Color(0xFFDC2626), fontWeight = FontWeight.SemiBold
+                                )
+                            }
                             !checkedIn -> {
                                 Button(
                                     onClick = {
                                         checkingIn = true
                                         scope.launch {
-                                            val r = FirebaseApi.dailyCheckIn(today, 1L)
-                                            checkingIn = false
-                                            if (r.isSuccess) {
-                                                state.refreshProfile()
-                                                state.toast("Checked in for today")
-                                            } else {
-                                                state.toast(r.exceptionOrNull()?.message ?: "Check-in failed")
+                                            when (val r = EarnApi.checkIn()) {
+                                                is EarnApi.CheckInOutcome.Ok -> {
+                                                    state.toast(
+                                                        if (r.milestone) "🎉 ${r.streak}-day streak! Checked in."
+                                                        else "Checked in for today — spins unlocked!"
+                                                    )
+                                                    reloadSnapshot()
+                                                    state.refreshProfile()
+                                                }
+                                                is EarnApi.CheckInOutcome.Rejected -> state.toast(r.message)
                                             }
+                                            checkingIn = false
                                         }
                                     },
                                     enabled = !checkingIn,
@@ -1471,45 +1528,59 @@ fun SpinScreen(state: AppState) {
                                 Button(
                                     onClick = {
                                         if (spinning) return@Button
-                                        if (spinsLeft <= 0L) {
-                                            state.toast("No spins left today")
-                                            return@Button
-                                        }
                                         spinning = true
                                         resultText = null
                                         scope.launch {
-                                            // Outcome decided FIRST (app band logic), then the wheel lands on it.
-                                            val balance = profile?.walletPaise ?: 0L
-                                            val segIndex = pickSpinSegment(balance)
-                                            val current = rotation.value
-                                            val segCenter = segIndex * 45f + 22.5f
-                                            val targetMod = (360f - segCenter) % 360f
-                                            val currentMod = ((current % 360f) + 360f) % 360f
-                                            var delta = targetMod - currentMod
-                                            if (delta < 0) delta += 360f
-                                            val target = current + 360f * 5 + delta
-                                            rotation.animateTo(
-                                                target,
-                                                animationSpec = tween(
-                                                    durationMillis = 7000,
-                                                    easing = CubicBezierEasing(0.12f, 0.8f, 0.08f, 1f)
-                                                )
-                                            )
-                                            spinning = false
-                                            resultText = when (segIndex) {
-                                                6 -> "Better Luck Next Time!"
-                                                7 -> "JACKPOT! You won ₹1"
-                                                else -> "You won ${SpinSegmentLabels[segIndex]}"
+                                            // The result is COMMITTED first (money +
+                                            // spin count in one atomic write); only
+                                            // then does the wheel animate to it.
+                                            when (val r = EarnApi.spin()) {
+                                                is EarnApi.SpinOutcome.Ok -> {
+                                                    val segIndex = qrmaster.web.data.SegmentPicker.indexOf(r.segment)
+                                                    val current = rotation.value
+                                                    val segCenter = segIndex * 45f + 22.5f
+                                                    val targetMod = (360f - segCenter) % 360f
+                                                    val currentMod = ((current % 360f) + 360f) % 360f
+                                                    var delta = targetMod - currentMod
+                                                    if (delta < 0) delta += 360f
+                                                    val target = current + 360f * 5 + delta
+                                                    rotation.animateTo(
+                                                        target,
+                                                        animationSpec = tween(
+                                                            durationMillis = 7000,
+                                                            easing = CubicBezierEasing(0.12f, 0.8f, 0.08f, 1f)
+                                                        )
+                                                    )
+                                                    resultText = when {
+                                                        r.prizePaise <= 0L -> "Better Luck Next Time!"
+                                                        r.jackpot -> "🎉 JACKPOT! You won ₹1"
+                                                        else -> "🎉 You won ₹${qrmaster.web.data.rupeesStr(r.prizePaise)}"
+                                                    }
+                                                    reloadSnapshot()
+                                                    state.refreshProfile()
+                                                }
+                                                is EarnApi.SpinOutcome.Rejected -> {
+                                                    resultText = null
+                                                    state.toast(r.message)
+                                                    reloadSnapshot()
+                                                }
                                             }
+                                            spinning = false
                                         }
                                     },
-                                    enabled = !spinning,
+                                    enabled = !spinning && snap != null,
                                     shape = RoundedCornerShape(11.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
                                     modifier = Modifier.fillMaxWidth().height(46.dp)
                                 ) {
                                     if (spinning) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
                                     else Text("Spin Now", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                }
+                                if (spinsLeft <= 0) {
+                                    Text(
+                                        "No spins left today. Come back tomorrow — or go Premium for 10 spins a day.",
+                                        fontSize = 12.sp, color = MutedText
+                                    )
                                 }
                             }
                         }
@@ -1523,7 +1594,8 @@ fun SpinScreen(state: AppState) {
                                 Column(Modifier.weight(1f)) {
                                     Text("Your Rewards", fontSize = 12.5.sp, color = MutedText)
                                     Text(
-                                        if (state.user == null) "—" else fmtRupees(profile?.walletPaise ?: 0L),
+                                        if (state.user == null) "—"
+                                        else fmtRupees(snap?.user?.walletPaise ?: state.profile?.walletPaise ?: 0L),
                                         fontSize = 17.sp, fontWeight = FontWeight.Bold, color = NavyText
                                     )
                                 }
@@ -1531,7 +1603,7 @@ fun SpinScreen(state: AppState) {
                             }
                         }
                         Text(
-                            "Demo spin on the website — rewards are credited by the secure server engine and go live with the full website build. The Android app credits instantly.",
+                            "Every spin is decided and credited by the same rules as the Android app — the result is saved first, then the wheel lands on it. Winnings go straight to your wallet.",
                             fontSize = 11.5.sp, color = MutedText
                         )
                     }
@@ -1560,22 +1632,6 @@ fun SpinScreen(state: AppState) {
         item { Spacer(Modifier.height(8.dp)) }
     }
 }
-
-/** Same bands as the app's EarnLogic: outcome segment by wallet balance. */
-fun pickSpinSegment(balancePaise: Long): Int {
-    val r = (nowMillis() % 10000L) / 100.0 // 0..99.99 pseudo-random from clock
-    return when {
-        balancePaise < 500 -> when {
-            r < 20 -> 1   // ₹2 (20%)
-            r < 70 -> 0   // ₹1 (50%)
-            else -> 6     // BLNT (30%)
-        }
-        balancePaise < 800 -> if (r < 15) 0 else 6   // ₹1 15% / BLNT 85%
-        balancePaise < 900 -> if (r < 3) 0 else 6    // ₹1 3% / BLNT 97%
-        else -> if (r < 1) 7 else 6                  // JACKPOT 1% / BLNT
-    }
-}
-
 /* ---------------- 6) Wallet (reference, real data) ---------------- */
 
 @Composable
@@ -1788,26 +1844,35 @@ fun WalletAction(label: String, icon: IconKind, modifier: Modifier, onClick: () 
     }
 }
 
-/* ---------------- 7) Tasks & Earn (reference, real tasks) ---------------- */
+/* ---------------- 7) Tasks & Earn (full app flow) ---------------- */
 
 @Composable
 fun TasksScreen(state: AppState) {
-    var tasks by remember { mutableStateOf<List<TaskItem>>(emptyList()) }
+    val scope = rememberCoroutineScope()
+    var tasks by remember { mutableStateOf<List<qrmaster.web.data.WebTask>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var chip by remember { mutableStateOf("All Tasks") }
-    var selected by remember { mutableStateOf<TaskItem?>(null) }
+    var selected by remember { mutableStateOf<qrmaster.web.data.WebTask?>(null) }
     val chips = listOf("All Tasks", "App Install", "Register", "Referral", "Survey")
 
-    LaunchedEffect(state.user) {
-        if (state.user != null) {
+    fun reload() {
+        scope.launch {
             loading = true
-            tasks = FirebaseApi.fetchTasks()
+            val bundle = try { EarnApi.loadTasks() } catch (e: Exception) { null }
+            tasks = bundle?.tasks ?: emptyList()
+            if (bundle?.error != null) state.toast(bundle.error)
             loading = false
+            // keep the open dialog in sync with fresh data
+            val sel = selected
+            if (sel != null) selected = tasks.firstOrNull { it.id == sel.id } ?: sel
         }
     }
+    LaunchedEffect(state.user) {
+        if (state.user != null) reload()
+    }
 
-    fun chipMatch(t: TaskItem): Boolean {
-        val hay = (t.title + " " + t.description).lowercase()
+    fun chipMatch(t: qrmaster.web.data.WebTask): Boolean {
+        val hay = (t.title + " " + t.desc).lowercase()
         return when (chip) {
             "All Tasks" -> true
             "App Install" -> listOf("install", "demat", "app", "open").any { hay.contains(it) }
@@ -1818,6 +1883,16 @@ fun TasksScreen(state: AppState) {
         }
     }
     val visible = tasks.filter { chipMatch(it) }
+
+    fun statusLabel(t: qrmaster.web.data.WebTask): Pair<String, Color> = when {
+        t.claimStatus == "claimed" || t.claimStatus == "approved" -> "Completed" to Color(0xFF16A34A)
+        t.claimStatus == "pending" -> "Under Review" to Color(0xFFB45309)
+        t.claimStatus == "rejected" && t.applyStatus == "active" -> "Rejected — Try Again" to Color(0xFFDC2626)
+        t.applyStatus == "active" -> "Applied — In Progress" to PurplePrimary
+        t.applyStatus == "submitted" -> "Under Review" to Color(0xFFB45309)
+        t.applyStatus == "expired" -> "Expired — Apply Again" to Color(0xFFDC2626)
+        else -> "" to MutedText
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -1861,7 +1936,7 @@ fun TasksScreen(state: AppState) {
                     }
                 }
             }
-        } else if (loading) {
+        } else if (loading && tasks.isEmpty()) {
             item {
                 Box(Modifier.fillMaxWidth().padding(26.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = PurplePrimary)
@@ -1873,6 +1948,7 @@ fun TasksScreen(state: AppState) {
             }
         } else {
             items(visible) { t ->
+                val (label, labelColor) = statusLabel(t)
                 WhiteCard(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
@@ -1888,7 +1964,10 @@ fun TasksScreen(state: AppState) {
                         Spacer(Modifier.width(13.dp))
                         Column(Modifier.weight(1f)) {
                             Text(t.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = NavyText, maxLines = 1)
-                            Text(t.description, fontSize = 12.sp, color = MutedText, maxLines = 1)
+                            Text(t.desc, fontSize = 12.sp, color = MutedText, maxLines = 1)
+                            if (label.isNotBlank()) {
+                                Text(label, fontSize = 11.5.sp, color = labelColor, fontWeight = FontWeight.Bold)
+                            }
                         }
                         Row(
                             Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFFFFF4D6))
@@ -1905,7 +1984,7 @@ fun TasksScreen(state: AppState) {
                             shape = RoundedCornerShape(9.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
                             modifier = Modifier.height(36.dp)
-                        ) { Text("Start Task", fontSize = 12.5.sp) }
+                        ) { Text(if (t.applyStatus == null && t.claimStatus == null) "Start Task" else "Open", fontSize = 12.5.sp) }
                     }
                 }
             }
@@ -1915,37 +1994,240 @@ fun TasksScreen(state: AppState) {
 
     val sel = selected
     if (sel != null) {
-        AlertDialog(
-            onDismissRequest = { selected = null },
-            title = { Text(sel.title) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    if (sel.description.isNotBlank()) Text(sel.description, fontSize = 13.sp)
-                    Text("Reward: ${fmtRupees(sel.rewardPaise)}" +
-                        (if (sel.payDays > 0) "  •  Payment within ${sel.payDays} days of approval" else "") +
-                        (if (sel.mode.isNotBlank()) "  •  ${sel.mode}" else ""), fontSize = 12.5.sp, color = MutedText)
-                    if (sel.conditions.isNotBlank()) {
-                        Text("Conditions:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(sel.conditions, fontSize = 12.5.sp)
-                    }
-                    Text(
-                        "Apply and proof submission currently run in the QR Master Android app; the website flow arrives with the full build.",
-                        fontSize = 12.sp, color = MutedText
-                    )
-                }
-            },
-            confirmButton = {
-                if (sel.link.isNotBlank()) {
-                    TextButton(onClick = { openExternal(sel.link) }) { Text("Open Task Link") }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { selected = null }) { Text("Close") }
-            }
-        )
+        TaskDetailDialog(state, sel, onClose = { selected = null }, onChanged = { reload() })
     }
 }
 
+@Composable
+private fun TaskDetailDialog(
+    state: AppState,
+    task: qrmaster.web.data.WebTask,
+    onClose: () -> Unit,
+    onChanged: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var agreed by remember(task.id) { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var linkClickedAt by remember(task.id) { mutableStateOf(0L) }
+    var nowTick by remember { mutableStateOf(nowMillis()) }
+    var shotB64 by remember(task.id) { mutableStateOf<String?>(null) }
+    var shotName by remember(task.id) { mutableStateOf("") }
+    var note by remember(task.id) { mutableStateOf("") }
+
+    val applied = task.applyStatus != null
+    val agreedOk = task.conditions.isBlank() || agreed
+    val timerTotal = maxOf(0, task.timerSec)
+    val timerDone = when {
+        task.linkOpenedAtMs > 0 && linkClickedAt == 0L -> true // opened in an earlier session
+        linkClickedAt > 0L -> nowTick - linkClickedAt >= timerTotal * 1000L
+        else -> timerTotal == 0
+    }
+    val timerLeft = if (linkClickedAt > 0L) {
+        maxOf(0, timerTotal - ((nowTick - linkClickedAt) / 1000).toInt())
+    } else 0
+
+    LaunchedEffect(linkClickedAt) {
+        while (linkClickedAt > 0L && nowMillis() - linkClickedAt < timerTotal * 1000L + 1000L) {
+            delay(500)
+            nowTick = nowMillis()
+        }
+    }
+
+    fun encodeShot(f: WebFile) {
+        scope.launch {
+            val dataUrl = loadFileDataUrl(f) ?: return@launch
+            imgOp("shotEncode", "{\"dataUrl\":\"$dataUrl\"}")
+            val res = awaitAsync("img", 60_000)
+            if (res != null && res.asyncOk()) {
+                shotB64 = res.asyncStr("b64")
+                shotName = f.name
+                if ((shotB64?.length ?: 0) > 700_000) {
+                    shotB64 = null
+                    state.toast("This screenshot is too large. Please choose a smaller one.")
+                }
+            } else {
+                state.toast("Could not process that screenshot")
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(task.title) },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                if (task.desc.isNotBlank()) Text(task.desc, fontSize = 13.sp)
+                if (task.details.isNotBlank()) Text(task.details, fontSize = 12.5.sp, color = MutedText)
+                Text(
+                    "Reward: ${fmtRupees(task.rewardPaise)}" +
+                        (if (task.payDays > 0) "  •  Payment within ${task.payDays} days of approval" else "") +
+                        (if (task.mode == "admin") "  •  Proof required" else "  •  Instant claim"),
+                    fontSize = 12.5.sp, color = MutedText
+                )
+                if (task.guideImageB64.isNotBlank()) {
+                    val bmp = remember(task.id) { decodeBitmapFromDataUrl("data:image/jpeg;base64," + task.guideImageB64) }
+                    if (bmp != null) {
+                        androidx.compose.foundation.Image(
+                            bmp, contentDescription = "Task guide",
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp)
+                                .clip(RoundedCornerShape(8.dp)).background(Color(0xFFF3F2FA))
+                        )
+                    }
+                }
+                if (task.conditions.isNotBlank()) {
+                    Text("Conditions:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(task.conditions, fontSize = 12.5.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = agreed, onCheckedChange = { agreed = it })
+                        Text("I have read and agree to all the conditions.", fontSize = 12.5.sp)
+                    }
+                }
+                when {
+                    task.claimStatus == "claimed" || task.claimStatus == "approved" -> {
+                        Text("✅ You have completed this task. The reward is in your wallet.", fontSize = 13.sp, color = Color(0xFF15803D), fontWeight = FontWeight.SemiBold)
+                    }
+                    task.claimStatus == "pending" || task.applyStatus == "submitted" -> {
+                        Text(
+                            "⏳ Your proof is waiting for approval." +
+                                (if (task.payDays > 0) " Payment is made within ${task.payDays} days of approval." else ""),
+                            fontSize = 13.sp, color = Color(0xFFB45309), fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    task.applyStatus == "expired" -> {
+                        Text(
+                            "The apply window for this attempt has expired, so no reward can be given for it. Apply again and finish within the days given.",
+                            fontSize = 13.sp, color = Color(0xFFDC2626)
+                        )
+                    }
+                    task.applyStatus == "active" -> {
+                        if (task.applyExpiresAtMs > 0) {
+                            Text(
+                                "Finish by ${fmtDateTime(task.applyExpiresAtMs)} to earn the reward.",
+                                fontSize = 12.sp, color = MutedText
+                            )
+                        }
+                        if (task.mode == "admin") {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
+                                            if (err != null) state.toast(err)
+                                            incoming.firstOrNull()?.let { encodeShot(it) }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(9.dp)
+                                ) { Text("Attach Screenshot", fontSize = 12.sp) }
+                                if (shotName.isNotBlank()) Text(shotName.take(20), fontSize = 12.sp, color = MutedText, maxLines = 1)
+                            }
+                            OutlinedTextField(
+                                value = note,
+                                onValueChange = { note = it },
+                                label = { Text("Note (optional)") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(9.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                task.claimStatus == "claimed" || task.claimStatus == "approved" ||
+                    task.claimStatus == "pending" || task.applyStatus == "submitted" -> {
+                    TextButton(onClick = onClose) { Text("OK") }
+                }
+                !applied || task.applyStatus == "expired" -> {
+                    TextButton(
+                        onClick = {
+                            busy = true
+                            scope.launch {
+                                when (val r = EarnApi.applyTask(task)) {
+                                    is qrmaster.web.data.SimpleOutcome.Ok -> {
+                                        state.toast("Task started — finish it within the given days.")
+                                        onChanged()
+                                    }
+                                    is qrmaster.web.data.SimpleOutcome.Rejected -> state.toast(r.message)
+                                }
+                                busy = false
+                            }
+                        },
+                        enabled = !busy
+                    ) { Text(if (task.applyStatus == "expired") "Apply Again" else "Apply Now") }
+                }
+                task.mode == "admin" -> {
+                    TextButton(
+                        onClick = {
+                            val shot = shotB64
+                            if (!agreedOk) { state.toast("Please tick the conditions first."); return@TextButton }
+                            if (shot == null) { state.toast("Please attach a screenshot of your proof."); return@TextButton }
+                            busy = true
+                            scope.launch {
+                                when (val r = EarnApi.submitTaskProof(task, shot, note)) {
+                                    is qrmaster.web.data.SimpleOutcome.Ok -> {
+                                        state.toast("Proof submitted — waiting for approval.")
+                                        onChanged()
+                                        onClose()
+                                    }
+                                    is qrmaster.web.data.SimpleOutcome.Rejected -> state.toast(r.message)
+                                }
+                                busy = false
+                            }
+                        },
+                        enabled = !busy
+                    ) { Text("Submit Proof") }
+                }
+                else -> {
+                    // Auto mode: open link -> timer -> claim
+                    if (!timerDone && linkClickedAt == 0L && task.linkOpenedAtMs <= 0L) {
+                        TextButton(
+                            onClick = {
+                                if (!agreedOk) { state.toast("Please tick the conditions first."); return@TextButton }
+                                if (task.linkUrl.isNotBlank()) {
+                                    linkClickedAt = nowMillis()
+                                    scope.launch { EarnApi.markLinkOpened(task.id) }
+                                    openExternal(task.linkUrl)
+                                } else {
+                                    linkClickedAt = nowMillis()
+                                }
+                            },
+                            enabled = !busy
+                        ) { Text("Open Task Link") }
+                    } else if (!timerDone) {
+                        TextButton(onClick = {}, enabled = false) { Text("Wait ${timerLeft}s…") }
+                    } else {
+                        TextButton(
+                            onClick = {
+                                if (!agreedOk) { state.toast("Please tick the conditions first."); return@TextButton }
+                                busy = true
+                                scope.launch {
+                                    when (val r = EarnApi.claimAutoTask(task)) {
+                                        is qrmaster.web.data.SimpleOutcome.Ok -> {
+                                            state.toast("🎉 ${fmtRupees(task.rewardPaise)} added to your wallet!")
+                                            state.refreshProfile()
+                                            onChanged()
+                                            onClose()
+                                        }
+                                        is qrmaster.web.data.SimpleOutcome.Rejected -> state.toast(r.message)
+                                    }
+                                    busy = false
+                                }
+                            },
+                            enabled = !busy
+                        ) { Text("Claim ${fmtRupees(task.rewardPaise)}") }
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose) { Text("Close") }
+        }
+    )
+}
 /* ---------------- 8) Settings (reference) ---------------- */
 
 @Composable
@@ -2088,7 +2370,6 @@ fun SettingsScreen(state: AppState) {
                                             "Language: English (the app and website are English-only).",
                                             fontSize = 12.sp, color = MutedText
                                         )
-                                        }
                                     }
                                 }
                             }
@@ -2273,27 +2554,36 @@ fun SettingsScreen(state: AppState) {
     }
 }
 
-/* ---------------- 9) Premium (reference, real plans) ---------------- */
-
-data class PlanDef(val name: String, val desc: String, val price: Int, val per: String, val tag: String?)
-
-val PremiumPlans = listOf(
-    PlanDef("Free", "Basic Access", 0, "Forever", null),
-    PlanDef("1 Month", "Best for Short Term", 99, "/ 1 Month", null),
-    PlanDef("3 Months", "Great Value", 249, "/ 3 Months", null),
-    PlanDef("6 Months", "Most Popular", 449, "/ 6 Months", "Popular"),
-    PlanDef("1 Year", "Most Savings", 849, "/ 1 Year", null)
-)
+/* ---------------- 9) Premium (app prices, UPI/UTR flow, My Requests) ---------------- */
 
 @Composable
 fun PremiumScreen(state: AppState) {
+    val scope = rememberCoroutineScope()
+    var cfg by remember { mutableStateOf<qrmaster.web.data.WebConfig?>(null) }
+    var requests by remember { mutableStateOf<List<qrmaster.web.data.MyRequest>>(emptyList()) }
+    var buyPlan by remember { mutableStateOf<String?>(null) }
+    var buyPack by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    fun reloadRequests() {
+        scope.launch {
+            requests = try { EarnApi.myRequests() } catch (e: Exception) { emptyList() }
+        }
+    }
+    LaunchedEffect(state.user) {
+        cfg = try { qrmaster.web.data.loadWebConfig(null) } catch (e: Exception) { null }
+        if (state.user != null) reloadRequests()
+    }
+    val prices = cfg?.prices ?: mapOf("1m" to 99, "3m" to 249, "6m" to 449, "1y" to 849)
+    val planCredits = cfg?.planCredits ?: mapOf("1m" to 100, "3m" to 300, "6m" to 600, "1y" to 1200)
+    val packs = cfg?.creditPacks ?: listOf(50 to 49, 120 to 99, 300 to 199)
+    val upiId = cfg?.upiId ?: "ayansikligar@slc"
+
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { Spacer(Modifier.height(2.dp)) }
         item {
-            // Hero banner (reference)
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
                     .background(Brush.horizontalGradient(listOf(Color(0xFF312E81), Color(0xFF6D28D9), Color(0xFF4338CA))))
@@ -2312,7 +2602,7 @@ fun PremiumScreen(state: AppState) {
                         Text("Unlock more features and get the best experience!", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
                         Spacer(Modifier.height(13.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            listOf("Ad-Free Experience", "Advanced Tools", "Priority Support").forEach { f ->
+                            listOf("10 Spins Every Day", "Free Credits With Every Plan", "Priority Support").forEach { f ->
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         Modifier.size(15.dp).clip(CircleShape).background(Color(0xFF22C55E)),
@@ -2332,7 +2622,6 @@ fun PremiumScreen(state: AppState) {
                             )
                         }
                     }
-                    // Gift illustration (simple shapes, reference-style)
                     if (heroWide) Box(Modifier.weight(0.7f).height(110.dp), contentAlignment = Alignment.Center) {
                         Box(
                             Modifier.size(74.dp).rotate(4f).clip(RoundedCornerShape(12.dp))
@@ -2355,7 +2644,31 @@ fun PremiumScreen(state: AppState) {
         }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(13.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                PremiumPlans.forEach { plan ->
+                // Free card (reference)
+                Column(
+                    Modifier.width(196.dp).height(218.dp)
+                        .clip(RoundedCornerShape(15.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Free", fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                    Text("Basic Access", fontSize = 11.5.sp, color = MutedText)
+                    Spacer(Modifier.height(13.dp))
+                    Text("₹0", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = NavyText)
+                    Text("Forever", fontSize = 11.5.sp, color = MutedText)
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(
+                        onClick = { },
+                        enabled = false,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (state.profile?.isPremium == true) "Basic Plan" else "Current Plan", fontSize = 12.5.sp) }
+                }
+                qrmaster.web.data.PremiumLogic.PLAN_KEYS.forEach { key ->
+                    val price = prices[key] ?: 0
+                    val name = qrmaster.web.data.PremiumLogic.planName(key)
+                    val credits = planCredits[key] ?: 0
                     Box {
                         Column(
                             Modifier.width(196.dp).height(218.dp)
@@ -2364,43 +2677,100 @@ fun PremiumScreen(state: AppState) {
                                 .padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(plan.name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
-                            Text(plan.desc, fontSize = 11.5.sp, color = MutedText)
+                            Text(name, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                            Text("+$credits free credits", fontSize = 11.5.sp, color = MutedText)
                             Spacer(Modifier.height(13.dp))
-                            Text("₹${plan.price}", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = NavyText)
-                            Text(plan.per, fontSize = 11.5.sp, color = MutedText)
+                            Text("₹$price", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = NavyText)
+                            Text("/ $name", fontSize = 11.5.sp, color = MutedText)
                             Spacer(Modifier.weight(1f))
-                            if (plan.price == 0) {
-                                OutlinedButton(
-                                    onClick = { },
-                                    enabled = false,
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("Current Plan", fontSize = 12.5.sp) }
-                            } else {
-                                Button(
-                                    onClick = {
-                                        if (state.user == null) {
-                                            state.navigate(Screen.Login)
-                                            state.toast("Login first to upgrade")
-                                        } else {
-                                            state.toast("Complete the payment in the QR Master app — premium activates after approval.")
-                                        }
-                                    },
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("Upgrade Now", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold) }
-                            }
+                            Button(
+                                onClick = {
+                                    if (state.user == null) {
+                                        state.navigate(Screen.Login)
+                                        state.toast("Login first to upgrade")
+                                    } else {
+                                        buyPlan = key
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Upgrade Now", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold) }
                         }
-                        if (plan.tag != null) {
+                        if (key == "6m") {
                             Box(
                                 Modifier.align(Alignment.TopCenter).offset(y = (-9).dp)
                                     .clip(RoundedCornerShape(10.dp)).background(PurplePrimary)
                                     .padding(horizontal = 11.dp, vertical = 3.dp)
                             ) {
-                                Text(plan.tag!!, color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                Text("Popular", color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Text("Credit Packs", fontSize = 15.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+            Text("Credits are used for HD passport sheets and premium tools. Your balance: ${state.profile?.credits ?: 0} credits.", fontSize = 12.5.sp, color = MutedText)
+        }
+        item {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(13.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                packs.forEach { (credits, price) ->
+                    Column(
+                        Modifier.width(196.dp).clip(RoundedCornerShape(15.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("$credits Credits", fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                        Spacer(Modifier.height(8.dp))
+                        Text("₹$price", fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, color = NavyText)
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                if (state.user == null) {
+                                    state.navigate(Screen.Login)
+                                    state.toast("Login first to buy credits")
+                                } else {
+                                    buyPack = credits to price
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Buy Credits", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold) }
+                    }
+                }
+            }
+        }
+        if (state.user != null && requests.isNotEmpty()) {
+            item {
+                Text("My Requests", fontSize = 15.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+            }
+            items(requests) { r ->
+                WhiteCard(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(horizontal = 15.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(r.title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText)
+                            Text(
+                                fmtDateTime(r.createdAtMs) +
+                                    (if (r.status.equals("rejected", true) && r.rejectReason.isNotBlank()) "  •  ${r.rejectReason}" else ""),
+                                fontSize = 11.5.sp, color = MutedText
+                            )
+                        }
+                        Text("₹${r.amountPaid}", fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                        Spacer(Modifier.width(10.dp))
+                        val (bg, fg) = when (r.status.lowercase()) {
+                            "approved" -> Color(0xFFDCFCE7) to Color(0xFF15803D)
+                            "rejected" -> Color(0xFFFEE2E2) to Color(0xFFDC2626)
+                            else -> Color(0xFFFFF4D6) to Color(0xFF92400E)
+                        }
+                        Box(
+                            Modifier.clip(RoundedCornerShape(9.dp)).background(bg)
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        ) {
+                            Text(r.status.replaceFirstChar { it.uppercase() }, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = fg)
                         }
                     }
                 }
@@ -2428,8 +2798,310 @@ fun PremiumScreen(state: AppState) {
         }
         item { Spacer(Modifier.height(8.dp)) }
     }
+
+    val plan = buyPlan
+    if (plan != null) {
+        PremiumBuyDialog(
+            state = state,
+            planKey = plan,
+            basePrice = prices[plan] ?: 0,
+            upiId = upiId,
+            onClose = { buyPlan = null },
+            onDone = { buyPlan = null; reloadRequests() }
+        )
+    }
+    val pack = buyPack
+    if (pack != null) {
+        CreditBuyDialog(
+            state = state,
+            packCredits = pack.first,
+            packPrice = pack.second,
+            upiId = upiId,
+            onClose = { buyPack = null },
+            onDone = { buyPack = null; reloadRequests() }
+        )
+    }
 }
 
+@Composable
+private fun PremiumBuyDialog(
+    state: AppState,
+    planKey: String,
+    basePrice: Int,
+    upiId: String,
+    onClose: () -> Unit,
+    onDone: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var couponInput by remember { mutableStateOf("") }
+    var coupon by remember { mutableStateOf<qrmaster.web.data.CouponOutcome.Ok?>(null) }
+    var couponMsg by remember { mutableStateOf<String?>(null) }
+    var couponBusy by remember { mutableStateOf(false) }
+    var utr by remember { mutableStateOf("") }
+    var shotB64 by remember { mutableStateOf<String?>(null) }
+    var shotName by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    val discount = if (coupon != null) {
+        qrmaster.web.data.PremiumLogic.discountFor(basePrice.toLong(), coupon!!.discountAmount, coupon!!.discountPct)
+    } else 0L
+    val finalAmt = basePrice - discount
+    val freeClaim = finalAmt <= 0L
+
+    fun encodeShot(f: WebFile) {
+        scope.launch {
+            val dataUrl = loadFileDataUrl(f) ?: return@launch
+            imgOp("shotEncode", "{\"dataUrl\":\"$dataUrl\"}")
+            val res = awaitAsync("img", 60_000)
+            if (res != null && res.asyncOk()) {
+                shotB64 = res.asyncStr("b64")
+                shotName = f.name
+            } else {
+                state.toast("Could not process that screenshot")
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Premium — ${qrmaster.web.data.PremiumLogic.planName(planKey)}") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Price: ₹$basePrice" + (if (discount > 0) "  •  Discount: −₹$discount  •  To pay: ₹$finalAmt" else ""), fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = couponInput,
+                        onValueChange = { couponInput = it.uppercase() },
+                        label = { Text("Coupon code (optional)") },
+                        singleLine = true, shape = RoundedCornerShape(9.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            couponBusy = true
+                            scope.launch {
+                                when (val r = EarnApi.applyCoupon(couponInput)) {
+                                    is qrmaster.web.data.CouponOutcome.Ok -> {
+                                        coupon = r; couponMsg = "Coupon applied!"
+                                    }
+                                    is qrmaster.web.data.CouponOutcome.Rejected -> {
+                                        coupon = null; couponMsg = r.message
+                                    }
+                                }
+                                couponBusy = false
+                            }
+                        },
+                        enabled = !couponBusy && couponInput.isNotBlank(),
+                        shape = RoundedCornerShape(9.dp)
+                    ) { Text("Apply", fontSize = 12.5.sp) }
+                }
+                if (couponMsg != null) {
+                    Text(couponMsg!!, fontSize = 12.5.sp, color = if (coupon != null) Color(0xFF15803D) else MaterialTheme.colorScheme.error)
+                }
+                if (freeClaim) {
+                    Text(
+                        "Your coupon covers the full price — no payment needed. Premium starts after the admin approves this request.",
+                        fontSize = 13.sp, color = Color(0xFF15803D)
+                    )
+                } else {
+                    Text("1) Pay ₹$finalAmt to this UPI ID:", fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(9.dp)).background(Color(0xFFF0EAFE))
+                                .padding(horizontal = 12.dp, vertical = 9.dp)
+                        ) { Text(upiId, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PurplePrimary) }
+                        OutlinedButton(
+                            onClick = { copyTextToClipboard(upiId); state.toast("UPI ID copied") },
+                            shape = RoundedCornerShape(9.dp)
+                        ) { Text("Copy", fontSize = 12.sp) }
+                        OutlinedButton(
+                            onClick = {
+                                openExternal("upi://pay?pa=$upiId&pn=Link%20To%20QR&am=$finalAmt&cu=INR")
+                            },
+                            shape = RoundedCornerShape(9.dp)
+                        ) { Text("Open UPI App", fontSize = 12.sp) }
+                    }
+                    Text("2) Enter the UTR / transaction number from your payment:", fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = utr,
+                        onValueChange = { utr = it },
+                        label = { Text("UTR number (12+ characters)") },
+                        singleLine = true, shape = RoundedCornerShape(9.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("3) Attach the payment screenshot:", fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
+                                    if (err != null) state.toast(err)
+                                    incoming.firstOrNull()?.let { encodeShot(it) }
+                                }
+                            },
+                            shape = RoundedCornerShape(9.dp)
+                        ) { Text("Attach Screenshot", fontSize = 12.sp) }
+                        if (shotName.isNotBlank()) Text(shotName.take(20), fontSize = 12.sp, color = MutedText, maxLines = 1)
+                    }
+                }
+                if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
+                Text(
+                    "Premium activates after the admin verifies your payment — usually quickly. Track it under My Requests.",
+                    fontSize = 11.5.sp, color = MutedText
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (!freeClaim) {
+                        if (!qrmaster.web.data.isValidUtr(utr)) {
+                            error = "Please enter a valid UTR (at least 12 letters/numbers)."
+                            return@TextButton
+                        }
+                        if (shotB64 == null) {
+                            error = "Please attach the payment screenshot."
+                            return@TextButton
+                        }
+                    }
+                    busy = true; error = null
+                    scope.launch {
+                        val r = EarnApi.submitPlanRequest(
+                            planKey, basePrice, coupon,
+                            if (freeClaim) "COUPON" else utr.trim(),
+                            if (freeClaim) null else shotB64
+                        )
+                        busy = false
+                        when (r) {
+                            is qrmaster.web.data.SimpleOutcome.Ok -> {
+                                state.toast("Request sent — premium activates after approval.")
+                                onDone()
+                            }
+                            is qrmaster.web.data.SimpleOutcome.Rejected -> error = r.message
+                        }
+                    }
+                },
+                enabled = !busy
+            ) { Text(if (freeClaim) "Claim Free Premium" else "Submit Request") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun CreditBuyDialog(
+    state: AppState,
+    packCredits: Int,
+    packPrice: Int,
+    upiId: String,
+    onClose: () -> Unit,
+    onDone: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var qty by remember { mutableStateOf(1) }
+    var utr by remember { mutableStateOf("") }
+    var shotB64 by remember { mutableStateOf<String?>(null) }
+    var shotName by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val total = packPrice * qty
+
+    fun encodeShot(f: WebFile) {
+        scope.launch {
+            val dataUrl = loadFileDataUrl(f) ?: return@launch
+            imgOp("shotEncode", "{\"dataUrl\":\"$dataUrl\"}")
+            val res = awaitAsync("img", 60_000)
+            if (res != null && res.asyncOk()) {
+                shotB64 = res.asyncStr("b64")
+                shotName = f.name
+            } else {
+                state.toast("Could not process that screenshot")
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Buy $packCredits Credits") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Quantity:", fontSize = 13.sp)
+                    OutlinedButton(onClick = { if (qty > 1) qty-- }, shape = RoundedCornerShape(8.dp)) { Text("−") }
+                    Text(qty.toString(), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    OutlinedButton(onClick = { if (qty < 5) qty++ }, shape = RoundedCornerShape(8.dp)) { Text("+") }
+                    Text("Total: ₹$total", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Text("Pay ₹$total to UPI ID:", fontSize = 13.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(9.dp)).background(Color(0xFFF0EAFE))
+                            .padding(horizontal = 12.dp, vertical = 9.dp)
+                    ) { Text(upiId, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PurplePrimary) }
+                    OutlinedButton(
+                        onClick = { copyTextToClipboard(upiId); state.toast("UPI ID copied") },
+                        shape = RoundedCornerShape(9.dp)
+                    ) { Text("Copy", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = { openExternal("upi://pay?pa=$upiId&pn=Link%20To%20QR&am=$total&cu=INR") },
+                        shape = RoundedCornerShape(9.dp)
+                    ) { Text("Open UPI App", fontSize = 12.sp) }
+                }
+                OutlinedTextField(
+                    value = utr,
+                    onValueChange = { utr = it },
+                    label = { Text("UTR number (12+ characters)") },
+                    singleLine = true, shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
+                                if (err != null) state.toast(err)
+                                incoming.firstOrNull()?.let { encodeShot(it) }
+                            }
+                        },
+                        shape = RoundedCornerShape(9.dp)
+                    ) { Text("Attach Screenshot (optional)", fontSize = 12.sp) }
+                    if (shotName.isNotBlank()) Text(shotName.take(20), fontSize = 12.sp, color = MutedText, maxLines = 1)
+                }
+                if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
+                Text("Credits are added after the admin verifies your payment.", fontSize = 11.5.sp, color = MutedText)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (!qrmaster.web.data.isValidUtr(utr)) {
+                        error = "Please enter a valid UTR (at least 12 letters/numbers)."
+                        return@TextButton
+                    }
+                    busy = true; error = null
+                    scope.launch {
+                        val r = EarnApi.submitCreditRequest(packCredits, packPrice, qty, utr.trim(), shotB64)
+                        busy = false
+                        when (r) {
+                            is qrmaster.web.data.SimpleOutcome.Ok -> {
+                                state.toast("Request sent — credits arrive after approval.")
+                                onDone()
+                            }
+                            is qrmaster.web.data.SimpleOutcome.Rejected -> error = r.message
+                        }
+                    }
+                },
+                enabled = !busy
+            ) { Text("Submit Request") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } }
+    )
+}
 /* ---------------- Login / Register ---------------- */
 
 @Composable

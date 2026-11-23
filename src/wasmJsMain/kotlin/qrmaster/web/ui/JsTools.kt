@@ -368,6 +368,6 @@ external fun clearHistoryJson()
 fun recordHistory(tool: String, title: String, detail: String) {
     fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
     pushHistoryJson(
-        "{\"tool\":\"${esc(tool)}\",\"title\":\"${esc(title)}\",\"detail\":\"${esc(detail)}\",\"ts\":${kotlinx.browser.window.Date.now().toLong()}}"
+        "{\"tool\":\"${esc(tool)}\",\"title\":\"${esc(title)}\",\"detail\":\"${esc(detail)}\",\"ts\":${nowMillis()}}"
     )
 }

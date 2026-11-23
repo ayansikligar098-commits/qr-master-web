@@ -41,6 +41,10 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.TextButton
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 // ── Compress PDF (dedicated tool) ──────────────────────────────────────────
 // Method (same family as Pi7): the PDF's embedded images are re-encoded at
