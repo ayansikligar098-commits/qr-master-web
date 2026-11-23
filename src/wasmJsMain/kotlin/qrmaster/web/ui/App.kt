@@ -254,6 +254,37 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
             SideItem(state, IconKind.Info, "About Us", Screen.Placeholder, onNavigate, "About Us")
 
             Spacer(Modifier.height(18.dp))
+            // Go Premium mini banner (as in reference design)
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                modifier = Modifier.fillMaxWidth().clickable {
+                    state.navigate(Screen.Premium); onNavigate()
+                }
+            ) {
+                Box(
+                    Modifier.fillMaxWidth()
+                        .background(Brush.linearGradient(listOf(Color(0xFF5B21B6), Color(0xFF2563EB))))
+                        .padding(14.dp)
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            QrIcon(IconKind.Crown, Color(0xFFFDE68A), size = 20.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Go Premium", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text("Unlock all tools & remove limits", color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text("Upgrade Now", color = PurpleDeep, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
             // User card at bottom
             Card(
                 colors = CardDefaults.cardColors(containerColor = colors.primaryContainer),

@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -399,7 +400,6 @@ fun AllToolsScreen(state: AppState) {
 @Composable
 fun QrGeneratorScreen(state: AppState) {
     val colors = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
     var content by remember { mutableStateOf("https://ayansikligar098-commits.github.io/qr-master-web/") }
     var eclIndex by remember { mutableStateOf(1) }
     val ecls = listOf(QrEcc.LOW, QrEcc.MEDIUM, QrEcc.QUARTILE, QrEcc.HIGH)
@@ -424,100 +424,137 @@ fun QrGeneratorScreen(state: AppState) {
             }
         }
         item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = colors.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Quick Templates", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = false, onClick = { content = "https://" }, label = { Text("Website URL") })
-                        FilterChip(selected = false, onClick = { content = "" }, label = { Text("Plain Text") })
-                        FilterChip(selected = false, onClick = { content = "upi://pay?pa=yourname@upi&pn=Your%20Name&am=" }, label = { Text("UPI Payment") })
-                        FilterChip(selected = false, onClick = { content = "WIFI:T:WPA;S:MyWiFi;P:password;;" }, label = { Text("Wi-Fi") })
-                        FilterChip(selected = false, onClick = { content = "tel:+91" }, label = { Text("Phone Number") })
-                    }
-                    OutlinedTextField(
-                        value = content,
-                        onValueChange = { content = it },
-                        label = { Text("QR me kya daalna hai — likho") },
-                        minLines = 3,
-                        maxLines = 5,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text("Error Correction Level", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        eclNames.forEachIndexed { i, name ->
-                            FilterChip(selected = eclIndex == i, onClick = { eclIndex = i }, label = { Text(name) })
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth >= 900.dp) {
+                    // Desktop workspace: settings panel + preview panel side by side
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Box(Modifier.weight(1.15f)) {
+                            QrSettingsCard(content, { content = it }, eclIndex, { eclIndex = it }, eclNames, qr)
+                        }
+                        Box(Modifier.weight(1f)) {
+                            QrPreviewCard(state, content, qr)
                         }
                     }
-                    Text(
-                        "${content.length} characters" + (qr?.let { " • Version ${it.version} • ${it.size}×${it.size} modules" } ?: ""),
-                        style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant
-                    )
-                }
-            }
-        }
-        item {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = colors.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    Modifier.padding(18.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("Preview", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    when {
-                        content.isBlank() -> {
-                            Box(
-                                Modifier.size(240.dp).clip(RoundedCornerShape(12.dp)).background(colors.surfaceVariant),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("Upar kuch likho —\nQR yahan bane ga", color = colors.onSurfaceVariant)
-                            }
-                        }
-                        qr != null -> {
-                            Box(Modifier.size(260.dp).clip(RoundedCornerShape(12.dp))) {
-                                QrCanvas(qr, Modifier.fillMaxSize())
-                            }
-                            Text(content.take(60), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1)
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            val png = PngEncoder.encodeQr(qr, 1024)
-                                            downloadPngBase64("qr-master-qr.png", Base64.encode(png))
-                                            state.logActivity("QR download hua — ${content.take(28)}")
-                                            state.toast("QR download ho gaya")
-                                        } catch (e: Exception) {
-                                            state.toast("Download fail — dobara try karo")
-                                        }
-                                    }
-                                },
-                                shape = RoundedCornerShape(22.dp),
-                                modifier = Modifier.widthIn(min = 220.dp)
-                            ) {
-                                QrIcon(IconKind.Download, Color.White, size = 18.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Download PNG", fontWeight = FontWeight.Bold)
-                            }
-                            Text("Phone se scan karke test karo — asli QR hai", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                        }
-                        else -> {
-                            Text("Text bahut lamba hai — QR me itna data nahi aayega. Chhota karke try karo.", color = colors.error)
-                        }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        QrSettingsCard(content, { content = it }, eclIndex, { eclIndex = it }, eclNames, qr)
+                        QrPreviewCard(state, content, qr)
                     }
                 }
             }
         }
         item { Spacer(Modifier.height(10.dp)) }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun QrSettingsCard(
+    content: String,
+    onContentChange: (String) -> Unit,
+    eclIndex: Int,
+    onEclChange: (Int) -> Unit,
+    eclNames: List<String>,
+    qr: QrCode?
+) {
+    val colors = MaterialTheme.colorScheme
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("QR Settings", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text("Quick Templates", style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = false, onClick = { onContentChange("https://") }, label = { Text("Website URL") })
+                FilterChip(selected = false, onClick = { onContentChange("") }, label = { Text("Plain Text") })
+                FilterChip(selected = false, onClick = { onContentChange("upi://pay?pa=yourname@upi&pn=Your%20Name&am=") }, label = { Text("UPI Payment") })
+                FilterChip(selected = false, onClick = { onContentChange("WIFI:T:WPA;S:MyWiFi;P:password;;") }, label = { Text("Wi-Fi") })
+                FilterChip(selected = false, onClick = { onContentChange("tel:+91") }, label = { Text("Phone Number") })
+            }
+            OutlinedTextField(
+                value = content,
+                onValueChange = onContentChange,
+                label = { Text("QR me kya daalna hai — likho") },
+                minLines = 3,
+                maxLines = 5,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("Error Correction Level", style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                eclNames.forEachIndexed { i, name ->
+                    FilterChip(selected = eclIndex == i, onClick = { onEclChange(i) }, label = { Text(name) })
+                }
+            }
+            Text(
+                "${content.length} characters" + (qr?.let { " • Version ${it.version} • ${it.size}×${it.size} modules" } ?: ""),
+                style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalEncodingApi::class)
+@Composable
+fun QrPreviewCard(state: AppState, content: String, qr: QrCode?) {
+    val colors = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            Modifier.padding(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("Preview & Download", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            when {
+                content.isBlank() -> {
+                    Box(
+                        Modifier.size(240.dp).clip(RoundedCornerShape(12.dp)).background(colors.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Kuch likho —\nQR yahan bane ga", color = colors.onSurfaceVariant)
+                    }
+                }
+                qr != null -> {
+                    Box(Modifier.size(260.dp).clip(RoundedCornerShape(12.dp))) {
+                        QrCanvas(qr, Modifier.fillMaxSize())
+                    }
+                    Text(content.take(60), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1)
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    val png = PngEncoder.encodeQr(qr, 1024)
+                                    downloadPngBase64("qr-master-qr.png", Base64.encode(png))
+                                    state.logActivity("QR download hua — ${content.take(28)}")
+                                    state.toast("QR download ho gaya")
+                                } catch (e: Exception) {
+                                    state.toast("Download fail — dobara try karo")
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(22.dp),
+                        modifier = Modifier.widthIn(min = 220.dp)
+                    ) {
+                        QrIcon(IconKind.Download, Color.White, size = 18.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Download PNG", fontWeight = FontWeight.Bold)
+                    }
+                    Text("Phone se scan karke test karo — asli QR hai", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                }
+                else -> {
+                    Text("Text bahut lamba hai — QR me itna data nahi aayega. Chhota karke try karo.", color = colors.error)
+                }
+            }
+        }
     }
 }
 
