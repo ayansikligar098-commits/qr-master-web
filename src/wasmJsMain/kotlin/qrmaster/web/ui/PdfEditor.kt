@@ -140,6 +140,28 @@ private object PdfEditorDocCache {
     var pdfB64: String? = null
     var fileName: String = ""
     var pages: List<EdPageState> = emptyList()
+    var idbRestoreTried: Boolean = false
+}
+
+private const val PDF_IDB_NAME = "pdf-session"
+
+/** Base64 length cap for IndexedDB persistence (~48 MB of PDF). Beyond
+ *  this the document still opens and works in-session via
+ *  [PdfEditorDocCache]; it just isn't written to durable storage. */
+private const val PDF_IDB_MAX_B64 = 64 * 1024 * 1024
+
+private fun pdfJsonEsc(s: String): String =
+    s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+/** Serialises the open document for IndexedDB (original PDF bytes as
+ *  base64 — JSON-safe as-is — plus the file name). Mirrors the Passport
+ *  tool's ppSaveSession: document-level only, edits are NOT saved. */
+private fun pdfSessionJson(b64: String, name: String): String =
+    "{\"v\":1,\"fileName\":\"${pdfJsonEsc(name)}\",\"pdf\":\"$b64\"}"
+
+private fun pdfSaveSession(b64: String, name: String) {
+    if (b64.length > PDF_IDB_MAX_B64) return
+    idbSave(PDF_IDB_NAME, pdfSessionJson(b64, name))
 }
 
 private enum class EdTool { Select, Text, Draw, Highlight, Rect, Ellipse, Line, Redact, Crop }
@@ -305,24 +327,23 @@ fun PdfEditorScreen(state: AppState) {
         }
     }
 
-    // Load a newly picked PDF.
-    LaunchedEffect(files.firstOrNull()?.id) {
-        val f = files.firstOrNull() ?: return@LaunchedEffect
-        busy = true; errorText = null; statusText = "Opening ${f.name}…"
+    // Opens a document from its base64 bytes — the one pipeline both a
+    // freshly picked file and an IndexedDB restore go through (page-count
+    // check + page-1 render gate). Returns true when the document opened.
+    suspend fun openDocument(b64: String, name: String, restored: Boolean): Boolean {
+        busy = true; errorText = null; statusText = "Opening $name…"
         val libErr = ensureEditorLibs()
-        if (libErr != null) { busy = false; errorText = libErr; return@LaunchedEffect }
-        val b64 = loadFileBase64(f.id)
-        if (b64 == null) { busy = false; errorText = "Could not read this file."; return@LaunchedEffect }
+        if (libErr != null) { busy = false; errorText = libErr; return false }
         val res = pdfCall("count", buildJsonObject { put("pdf", b64) }.toString(), 60_000)
         if (res == null || !res.asyncOk()) {
             busy = false
             errorText = if (res == null) "Opening timed out. Please try again."
                 else friendlyPdfError(res.asyncError())
-            return@LaunchedEffect
+            return false
         }
         val count = res.asyncStr("pages").toIntOrNull() ?: 0
-        if (count <= 0) { busy = false; errorText = "This PDF has no pages."; return@LaunchedEffect }
-        pdfB64 = b64; fileName = f.name
+        if (count <= 0) { busy = false; errorText = "This PDF has no pages."; return false }
+        pdfB64 = b64; fileName = name
         val capped = min(count, 50)
         pages = (0 until capped).map { EdPageState(srcIndex = it) }
         current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
@@ -340,10 +361,61 @@ fun PdfEditorScreen(state: AppState) {
             previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
             statusText = null
             errorText = msg
-            return@LaunchedEffect
+            return false
         }
-        statusText = if (count > 50) "Opened the first 50 of $count pages (editor limit)." else "Opened $count pages."
+        statusText = when {
+            restored -> "Your last document was restored — pick up right where you left off, or tap “Open PDF” to start over."
+            count > 50 -> "Opened the first 50 of $count pages (editor limit)."
+            else -> "Opened $count pages."
+        }
         for (i in 0 until capped) renderThumb(i)
+        // Persist the freshly opened document (a different file replaces
+        // the previous record). A restore doesn't re-save — its record
+        // is already the one in storage.
+        if (!restored) pdfSaveSession(b64, name)
+        return true
+    }
+
+    // Load a newly picked PDF.
+    LaunchedEffect(files.firstOrNull()?.id) {
+        val f = files.firstOrNull() ?: return@LaunchedEffect
+        busy = true; errorText = null; statusText = "Opening ${f.name}…"
+        val b64 = loadFileBase64(f.id)
+        if (b64 == null) { busy = false; errorText = "Could not read this file."; return@LaunchedEffect }
+        openDocument(b64, f.name, restored = false)
+    }
+
+    // Restore the last opened document from IndexedDB — a discarded tab
+    // or a full page reload loses nothing (PdfEditorDocCache only
+    // survives layout flips inside one page load). Document-level
+    // restore only: the original PDF comes back exactly as opened;
+    // in-progress edits are not saved. Mirrors the Passport restore.
+    LaunchedEffect(Unit) {
+        if (!PdfEditorDocCache.idbRestoreTried) {
+            PdfEditorDocCache.idbRestoreTried = true
+            if (pdfB64 == null && pages.isEmpty()) {
+                idbLoadStart(PDF_IDB_NAME, "pdf:restore")
+                val res = awaitAsync("pdf:restore", 10_000)
+                val json = if (res != null && res.asyncOk()) res.asyncStr("json") else ""
+                // Re-check: the user may have picked a file meanwhile.
+                if (json.isNotBlank() && pdfB64 == null && pages.isEmpty()) {
+                    val root = try {
+                        toolsJson.parseToJsonElement(json).jsonObject
+                    } catch (e: Exception) { null }
+                    val savedB64 = root?.asyncStr("pdf") ?: ""
+                    val savedName = root?.asyncStr("fileName") ?: ""
+                    if (savedB64.isNotBlank()) {
+                        val ok = openDocument(savedB64, savedName.ifBlank { "Restored document.pdf" }, restored = true)
+                        if (!ok) {
+                            // The saved copy no longer opens — drop the
+                            // record so the picker comes up clean, quietly.
+                            idbClear(PDF_IDB_NAME)
+                            errorText = null; statusText = null
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Saved signatures from local storage.
@@ -950,6 +1022,7 @@ fun PdfEditorScreen(state: AppState) {
                 OutlinedButton(onClick = {
                     files = emptyList(); pages = emptyList(); pdfB64 = null
                     previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); selectedId = null
+                    idbClear(PDF_IDB_NAME)
                 }) { Text("Open PDF", fontSize = 13.sp) }
                 Spacer(Modifier.width(10.dp))
                 Button(onClick = { download() }, enabled = !busy,
