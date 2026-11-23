@@ -2092,6 +2092,8 @@ fun PremiumScreen(state: AppState) {
                     .background(Brush.horizontalGradient(listOf(Color(0xFF312E81), Color(0xFF6D28D9), Color(0xFF4338CA))))
                     .padding(22.dp)
             ) {
+              BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val heroWide = maxWidth >= 640.dp
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1.6f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2102,7 +2104,7 @@ fun PremiumScreen(state: AppState) {
                         Spacer(Modifier.height(5.dp))
                         Text("Unlock more features and get the best experience!", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
                         Spacer(Modifier.height(13.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                             listOf("Ad-Free Experience", "Advanced Tools", "Priority Support").forEach { f ->
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
@@ -2124,7 +2126,7 @@ fun PremiumScreen(state: AppState) {
                         }
                     }
                     // Gift illustration (simple shapes, reference-style)
-                    Box(Modifier.weight(0.7f).height(110.dp), contentAlignment = Alignment.Center) {
+                    if (heroWide) Box(Modifier.weight(0.7f).height(110.dp), contentAlignment = Alignment.Center) {
                         Box(
                             Modifier.size(74.dp).rotate(4f).clip(RoundedCornerShape(12.dp))
                                 .background(Brush.verticalGradient(listOf(Color(0xFFEC4899), Color(0xFF9333EA))))
@@ -2141,6 +2143,7 @@ fun PremiumScreen(state: AppState) {
                         )
                     }
                 }
+              }
             }
         }
         item {
@@ -2197,9 +2200,10 @@ fun PremiumScreen(state: AppState) {
             }
         }
         item {
-            Row(
+            FlowRow(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
                 listOf(
                     Triple("Instant Access", IconKind.Zap, Color(0xFFF59E0B)),
