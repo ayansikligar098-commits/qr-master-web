@@ -65,7 +65,7 @@ import qrmaster.web.data.fetchAppRelease
 enum class Screen {
     Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Tasks,
     Settings, Premium, Login, Placeholder,
-    Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage, PdfEditor,
+    Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage, PdfEditor, PassportPhoto,
     AgeCalc, BmiCalc, UnitConvert, CurrencyConvert, PercentCalc,
     Bonus, Invite, History, Notifications, Support, About
 }

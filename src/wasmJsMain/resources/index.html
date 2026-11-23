@@ -144,6 +144,36 @@
         });
     })();
 
+    // ── Paste (opt-in per tool) ──────────────────────────────────────────
+    // A tool that accepts pasted images sets window.__qmPasteArmed = true
+    // while it is on screen; pasted files then land in the same registry
+    // + dropped queue as drag & drop, so validation stays identical.
+    window.__qmPasteArmed = false;
+    document.addEventListener('paste', function (e) {
+        if (!window.__qmPasteArmed) return;
+        var files = (e.clipboardData && e.clipboardData.files) || [];
+        if (!files.length) return;
+        e.preventDefault();
+        for (var i = 0; i < files.length; i++) qmRegisterFile(files[i], window.__qmDroppedQ);
+    });
+
+    // ── Fetch a same-origin resource as a data URL (per-call async key) ──
+    // Used by the Passport Photo Maker for its outfit overlay PNGs.
+    window.__qmFetchDataUrl = function (url, key) {
+        window.__qmAsync[key] = '';
+        fetch(url).then(function (r) {
+            if (!r.ok) throw new Error('Could not load ' + url);
+            return r.blob();
+        }).then(function (blob) {
+            var rd = new FileReader();
+            rd.onload = function () { qmSetAsync(key, { ok: true, dataUrl: String(rd.result || '') }); };
+            rd.onerror = function () { qmSetAsync(key, { ok: false, error: 'Could not read ' + url }); };
+            rd.readAsDataURL(blob);
+        }).catch(function (e) {
+            qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+        });
+    };
+
     // ── Lazy script loader ───────────────────────────────────────────────
     window.__qmLibState = {}; // name -> 'loading' | 'ready' | 'error:...'
     function qmLoadScript(name, url) {
@@ -244,6 +274,18 @@
                     }
                     var ibytes = await idoc.save();
                     qmSetAsync(key, { ok: true, b64: qmBytesToB64(ibytes), pages: idoc.getPageCount() });
+                } else if (op === 'imagePage') {
+                    // One image filling one page of an exact physical size
+                    // (page size in PDF points) — the print-sheet PDF, so a
+                    // 4x6 / A4 sheet prints at true size.
+                    var pdoc = await PDFDocument.create();
+                    var pimg = (args.mime && args.mime.indexOf('png') >= 0)
+                        ? await pdoc.embedPng(qmB64ToBytes(args.b64))
+                        : await pdoc.embedJpg(qmB64ToBytes(args.b64));
+                    var ppage = pdoc.addPage([args.wPt, args.hPt]);
+                    ppage.drawImage(pimg, { x: 0, y: 0, width: args.wPt, height: args.hPt });
+                    var pbytes = await pdoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(pbytes), pages: 1 });
                 } else if (op === 'renderPage') {
                     if (typeof pdfjsLib === 'undefined') throw new Error('PDF viewer library is still loading. Try again in a moment.');
                     var rp = await qmEditorRenderPage(args.pdf, args.page || 1, args.scale || 1.6, args.rotation || 0);
@@ -889,9 +931,11 @@
     window.__qmStoreSet = function (k, v) { try { localStorage.setItem('qm_' + k, '' + v); } catch (e) {} };
 
     // ── Background removal (lazy, model downloads on first use) ──────────
+    // Optional per-call async key (the Passport tool runs it on its own
+    // slot); the Remove Background tool keeps the default 'bg' slot.
     window.__qmBgProgress = '';
-    window.__qmBgRemove = function (dataUrl) {
-        var key = 'bg';
+    window.__qmBgRemove = function (dataUrl, key) {
+        key = key || 'bg';
         window.__qmAsync[key] = '';
         window.__qmBgProgress = 'Starting…';
         fetch(dataUrl).then(function (r) { return r.blob(); }).then(function (blob) {
@@ -913,6 +957,138 @@
         }).catch(function (e) {
             qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
         });
+    };
+
+    // ── Face detection (face-api.js tiny detector, lazy) ─────────────────
+    // Used by the Passport Photo Maker to auto-frame the face. The script
+    // (~2 MB) and the tiny model (~200 KB) load from the CDN only when a
+    // photo is uploaded there; any failure is reported honestly and the
+    // tool falls back to manual framing.
+    window.__qmFaceApiPromise = null;
+    window.__qmFaceModelReady = false;
+    function qmLoadFaceApi() {
+        if (typeof faceapi !== 'undefined') return Promise.resolve();
+        if (window.__qmFaceApiPromise) return window.__qmFaceApiPromise;
+        window.__qmFaceApiPromise = new Promise(function (resolve, reject) {
+            var s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js';
+            s.onload = function () { resolve(); };
+            s.onerror = function () {
+                window.__qmFaceApiPromise = null;
+                reject(new Error('Could not load the face-detection tool. Check your connection.'));
+            };
+            document.head.appendChild(s);
+        });
+        return window.__qmFaceApiPromise;
+    }
+    window.__qmFaceDetect = function (dataUrl, key) {
+        window.__qmAsync[key] = '';
+        (async function () {
+            try {
+                await qmWithTimeout(qmLoadFaceApi(), 60000, 'Timed out loading the face-detection tool.');
+                if (!window.__qmFaceModelReady) {
+                    await qmWithTimeout(
+                        faceapi.nets.tinyFaceDetector.loadFromUri(
+                            'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model'),
+                        60000, 'Timed out loading the face-detection model.');
+                    window.__qmFaceModelReady = true;
+                }
+                var img = await qmLoadImage(dataUrl);
+                var det = await qmWithTimeout(
+                    faceapi.detectSingleFace(img,
+                        new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 })),
+                    60000, 'Face detection timed out.');
+                if (!det || !det.box) {
+                    qmSetAsync(key, { ok: true, found: false, iw: img.naturalWidth, ih: img.naturalHeight });
+                    return;
+                }
+                var b = det.box;
+                qmSetAsync(key, {
+                    ok: true, found: true,
+                    x: b.x, y: b.y, w: b.width, h: b.height,
+                    iw: img.naturalWidth, ih: img.naturalHeight
+                });
+            } catch (e) {
+                qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+            }
+        })();
+    };
+
+    // ── Passport Photo Maker ops (per-call async keys) ───────────────────
+    // Brightness/contrast over raw RGBA bytes. One shared formula with the
+    // Compose preview's colour matrix:
+    //   out = clamp(((v/255 - 0.5) * contrast + 0.5 + (brightness - 1)) * 255)
+    function qmAdjustPixels(data, brightness, contrast) {
+        var b = (brightness == null ? 1 : brightness) - 1;
+        var c = (contrast == null ? 1 : contrast);
+        if (b === 0 && c === 1) return;
+        for (var i = 0; i < data.length; i += 4) {
+            for (var j = 0; j < 3; j++) {
+                var v = (data[i + j] / 255 - 0.5) * c + 0.5 + b;
+                data[i + j] = v < 0 ? 0 : (v > 1 ? 255 : Math.round(v * 255));
+            }
+        }
+    }
+    window.__qmPassportOp = function (op, argsJson, key) {
+        window.__qmAsync[key] = '';
+        (async function () {
+            try {
+                var args = JSON.parse(argsJson || '{}');
+                if (op === 'renderPhoto') {
+                    var img = await qmLoadImage(args.dataUrl);
+                    var cv = document.createElement('canvas');
+                    cv.width = args.outW; cv.height = args.outH;
+                    var ctx = cv.getContext('2d');
+                    if (args.bgGrad && args.bgGrad.length === 2) {
+                        var grad = ctx.createLinearGradient(0, 0, 0, cv.height);
+                        grad.addColorStop(0, args.bgGrad[0]);
+                        grad.addColorStop(1, args.bgGrad[1]);
+                        ctx.fillStyle = grad;
+                        ctx.fillRect(0, 0, cv.width, cv.height);
+                    } else if (args.bg) { ctx.fillStyle = args.bg; ctx.fillRect(0, 0, cv.width, cv.height); }
+                    ctx.drawImage(img, args.cropX, args.cropY, args.cropW, args.cropH, 0, 0, args.outW, args.outH);
+                    if (args.outfit) {
+                        var outfitImg = await qmLoadImage(args.outfit);
+                        ctx.drawImage(outfitImg, args.outfitX || 0, args.outfitY || 0, args.outfitW || cv.width, args.outfitH || cv.height);
+                    }
+                    if ((args.brightness != null && args.brightness !== 1) ||
+                        (args.contrast != null && args.contrast !== 1)) {
+                        var id = ctx.getImageData(0, 0, cv.width, cv.height);
+                        qmAdjustPixels(id.data, args.brightness, args.contrast);
+                        ctx.putImageData(id, 0, 0);
+                    }
+                    qmSetAsync(key, {
+                        ok: true,
+                        dataUrl: cv.toDataURL(args.mime || 'image/png', args.quality || 0.92),
+                        w: args.outW, h: args.outH
+                    });
+                } else if (op === 'renderSheet') {
+                    var photo = await qmLoadImage(args.photoDataUrl);
+                    var sc = document.createElement('canvas');
+                    sc.width = args.paperW; sc.height = args.paperH;
+                    var sctx = sc.getContext('2d');
+                    sctx.fillStyle = '#ffffff';
+                    sctx.fillRect(0, 0, sc.width, sc.height);
+                    var cells = args.cells || [];
+                    for (var i = 0; i < cells.length; i++) {
+                        var cell = cells[i];
+                        sctx.drawImage(photo, cell.x, cell.y, cell.w, cell.h);
+                        sctx.strokeStyle = 'rgba(0,0,0,0.18)';
+                        sctx.lineWidth = 1;
+                        sctx.strokeRect(cell.x + 0.5, cell.y + 0.5, cell.w - 1, cell.h - 1);
+                    }
+                    qmSetAsync(key, {
+                        ok: true,
+                        dataUrl: sc.toDataURL(args.mime || 'image/jpeg', args.quality || 0.92),
+                        w: args.paperW, h: args.paperH, count: cells.length
+                    });
+                } else {
+                    throw new Error('Unknown passport operation.');
+                }
+            } catch (e) {
+                qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+            }
+        })();
     };
     </script>
     <script type="application/javascript" src="qrmaster.js"></script>

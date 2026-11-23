@@ -94,6 +94,21 @@ external fun bgRemoveStart(dataUrl: String)
 @JsFun("() => { return window.__qmBgProgress || ''; }")
 external fun bgProgress(): String
 
+@JsFun("(dataUrl, key) => { window.__qmBgRemove(dataUrl, key); }")
+external fun bgRemoveStartKeyed(dataUrl: String, key: String)
+
+@JsFun("(dataUrl, key) => { window.__qmFaceDetect(dataUrl, key); }")
+external fun faceDetectStart(dataUrl: String, key: String)
+
+@JsFun("(op, argsJson, key) => { window.__qmPassportOp(op, argsJson, key); }")
+external fun passportOp(op: String, argsJson: String, key: String)
+
+@JsFun("(url, key) => { window.__qmFetchDataUrl(url, key); }")
+external fun fetchDataUrlStart(url: String, key: String)
+
+@JsFun("(on) => { window.__qmPasteArmed = !!on; }")
+external fun setPasteArmed(on: Boolean)
+
 @JsFun(
     """(name, b64, mime) => {
         const bin = atob(b64);
@@ -194,6 +209,66 @@ suspend fun pdfCall(op: String, argsJson: String, timeoutMs: Long = 120_000): Js
     val key = "pdf:$pdfCallSeq"
     pdfOp(op, argsJson, key)
     return awaitAsync(key, timeoutMs)
+}
+
+private var bgCallSeq = 0
+
+/**
+ * Background removal on its OWN async slot (same discipline as pdfCall),
+ * reporting the shell's progress text through [onProgress] while waiting.
+ * The first call also downloads the removal model (~40 MB), hence the
+ * generous default timeout.
+ */
+suspend fun bgCall(
+    dataUrl: String,
+    timeoutMs: Long = 300_000,
+    onProgress: (String) -> Unit = {}
+): JsonObject? {
+    bgCallSeq += 1
+    val key = "bg:$bgCallSeq"
+    bgRemoveStartKeyed(dataUrl, key)
+    var waited = 0L
+    while (waited < timeoutMs) {
+        onProgress(bgProgress())
+        val s = pollAsync(key)
+        if (s.isNotEmpty()) {
+            return try { toolsJson.parseToJsonElement(s).jsonObject } catch (e: Exception) { null }
+        }
+        delay(300)
+        waited += 300
+    }
+    return null
+}
+
+private var faceCallSeq = 0
+
+/** Face detection on its own async slot; result carries the face box. */
+suspend fun faceCall(dataUrl: String, timeoutMs: Long = 120_000): JsonObject? {
+    faceCallSeq += 1
+    val key = "face:$faceCallSeq"
+    faceDetectStart(dataUrl, key)
+    return awaitAsync(key, timeoutMs)
+}
+
+private var passportCallSeq = 0
+
+/** Passport render ops (renderPhoto / renderSheet) on their own slot. */
+suspend fun passportCall(op: String, argsJson: String, timeoutMs: Long = 120_000): JsonObject? {
+    passportCallSeq += 1
+    val key = "pp:$passportCallSeq"
+    passportOp(op, argsJson, key)
+    return awaitAsync(key, timeoutMs)
+}
+
+private var fetchCallSeq = 0
+
+/** Fetches a same-origin resource (e.g. an outfit overlay PNG) as a data URL. */
+suspend fun fetchResourceDataUrl(url: String, timeoutMs: Long = 30_000): String? {
+    fetchCallSeq += 1
+    val key = "fetch:$fetchCallSeq"
+    fetchDataUrlStart(url, key)
+    val res = awaitAsync(key, timeoutMs) ?: return null
+    return if (res.asyncOk()) res.asyncStr("dataUrl").ifBlank { null } else null
 }
 
 fun JsonObject.asyncOk(): Boolean =

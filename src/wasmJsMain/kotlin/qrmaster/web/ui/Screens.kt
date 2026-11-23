@@ -207,6 +207,7 @@ fun ScreenContent(state: AppState) {
         Screen.CompressPdf -> CompressPdfScreen(state)
         Screen.CompressImage -> CompressImageScreen(state)
         Screen.PdfEditor -> PdfEditorScreen(state)
+        Screen.PassportPhoto -> PassportPhotoScreen(state)
         Screen.Bonus -> BonusScreen(state)
         Screen.Invite -> InviteScreen(state)
         Screen.History -> HistoryScreen(state)
@@ -316,6 +317,7 @@ fun homeTools(): List<ToolCardDef> = listOf(
     ToolCardDef("Merge PDF", "PDF Tools", "PDF", IconKind.Merge, Color(0xFFDC2626)) { it.openPdf("Merge PDF") },
     ToolCardDef("Compress PDF", "PDF Tools", "PDF", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
     ToolCardDef("Remove BG", "Photo Tools", "Productivity", IconKind.Star, Color(0xFF7C3AED)) { it.navigate(Screen.RemoveBg) },
+    ToolCardDef("Passport Photo", "Photo Tools", "Productivity", IconKind.Users, Color(0xFF0284C7)) { it.navigate(Screen.PassportPhoto) },
     ToolCardDef("Resize Image", "Photo Tools", "Productivity", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },
     ToolCardDef("Age Calculator", "Calculators", "Calculators", IconKind.Calendar, Color(0xFFDB2777)) { it.navigate(Screen.AgeCalc) },
     ToolCardDef("BMI Calculator", "Calculators & Converters", "Calculators", IconKind.Calc, Color(0xFF0284C7)) { it.navigate(Screen.BmiCalc) },
@@ -667,6 +669,7 @@ fun AllToolsScreen(state: AppState) {
         ToolCardDef("Document Scanner", "", "Image Tools", IconKind.Scan, Color(0xFF2563EB)) { it.navigate(Screen.Scanner) },
         ToolCardDef("Compress Image", "", "Image Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressImage) },
         ToolCardDef("Remove BG", "", "Image Tools", IconKind.Star, Color(0xFF9333EA)) { it.navigate(Screen.RemoveBg) },
+        ToolCardDef("Passport Photo", "", "Image Tools", IconKind.Users, Color(0xFF0284C7)) { it.navigate(Screen.PassportPhoto) },
         ToolCardDef("Resize Image", "", "Image Tools", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },
         ToolCardDef("Image to PDF", "", "Image Tools", IconKind.FileText, Color(0xFFDB2777)) { it.openPdf("Images to PDF") }
     )
