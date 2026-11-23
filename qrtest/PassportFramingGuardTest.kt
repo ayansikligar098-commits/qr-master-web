@@ -3,6 +3,7 @@ import qrmaster.web.ui.ppCentreCrop
 import qrmaster.web.ui.ppFaceCoverage
 import qrmaster.web.ui.ppFaceCrop
 import qrmaster.web.ui.ppFaceCropSafe
+import qrmaster.web.ui.ppHeadBox
 import qrmaster.web.ui.ppOutfitRect
 import qrmaster.web.ui.ppOutfitRectInSource
 import qrmaster.web.ui.ppSheetLayout
@@ -38,17 +39,59 @@ fun main() {
     val aspect = 35.0 / 45.0
 
     // ── The exact live case (2026-11-24): selfie 736×1263, face-api box ──
+    // Head-based framing: head = box expanded by ppHeadBox (crown 0.36×
+    // above the forehead box top, chin 0.04× below), crop sized so the
+    // head is 64% of the crop height, crown 11% below the crop top.
     run {
         val f = ppFaceCropSafe(736, 1263, aspect, 223.55f, 369.04f, 295.41f, 297.31f)
         gcheck("live selfie: no fallback needed", !f.fellBack)
-        gcheck("live selfie: crop ≈ (161,312,420,541)",
-            gnear(f.crop.x, 161f) && gnear(f.crop.y, 312f) && gnear(f.crop.w, 420f) && gnear(f.crop.h, 541f),
+        gcheck("live selfie: crop ≈ (118,190,506,650)",
+            gnear(f.crop.x, 118f) && gnear(f.crop.y, 190f) && gnear(f.crop.w, 506f) && gnear(f.crop.h, 650f),
             "got ${f.crop}")
         gcheck("live selfie: face fully covered",
             ppFaceCoverage(f.crop, 223.55f, 369.04f, 295.41f, 297.31f) >= 0.999f,
             "cov=${ppFaceCoverage(f.crop, 223.55f, 369.04f, 295.41f, 297.31f)}")
-        val faceFrac = 297.31f / f.crop.h
-        gcheck("live selfie: face height 50–70% of frame", faceFrac in 0.5f..0.7f, "frac=$faceFrac")
+        val head = ppHeadBox(223.55f, 369.04f, 295.41f, 297.31f)
+        val headFrac = head.h / f.crop.h
+        gcheck("live selfie: head height 55–70% of frame", headFrac in 0.55f..0.70f, "frac=$headFrac")
+        val crownRoom = (head.y - f.crop.y) / f.crop.h
+        gcheck("live selfie: crown headroom 4–30% of frame", crownRoom in 0.04f..0.30f, "room=$crownRoom")
+    }
+
+    // ── Acceptance measurements on REAL photos (2026-11-24) ─────────────
+    // Face boxes are the site's own face-api output; crown/chin are the
+    // person's true extremes measured from the background-removal alpha
+    // silhouette (crown = topmost opaque pixel in the head band; chin =
+    // jaw bottom from the silhouette profile / box bottom). The OUTPUT
+    // (crop mapped to the frame) must satisfy: crown ≥ 4% of frame
+    // height below the top edge, crown→chin = 55–70% of frame height,
+    // and no part of the head touching any frame edge.
+    data class Sample(
+        val label: String, val iw: Int, val ih: Int,
+        val fx: Float, val fy: Float, val fw: Float, val fh: Float,
+        val crown: Float, val chin: Float
+    )
+    val samples = listOf(
+        // The failing live case: bald selfie, ocean background.
+        Sample("selfie (bald)", 736, 1263, 223.55f, 369.04f, 295.41f, 297.31f, 292f, 666.35f),
+        // Tight head-shot, voluminous hair (chin = jaw from alpha profile).
+        Sample("tight head-shot (hair)", 960, 960, 231.47f, 277.17f, 438.14f, 400.53f, 108f, 640f),
+        // Same head-shot with chin at the detector box bottom (upper bound).
+        Sample("tight head-shot (box chin)", 960, 960, 231.47f, 277.17f, 438.14f, 400.53f, 108f, 677.70f),
+        // Full-length 1870s portrait: small face, hat-like hair mass.
+        Sample("full-length (small face)", 994, 1536, 331.71f, 224.40f, 191.54f, 171.68f, 144f, 396.08f),
+        // Face low in frame (top 760 px of the selfie; face centre at 68%).
+        Sample("face low in frame", 736, 760, 222.57f, 378.16f, 295.26f, 269.77f, 291f, 666.35f)
+    )
+    for (s in samples) {
+        val f = ppFaceCropSafe(s.iw, s.ih, aspect, s.fx, s.fy, s.fw, s.fh)
+        val room = (s.crown - f.crop.y) / f.crop.h
+        val headFrac = (s.chin - s.crown) / f.crop.h
+        gcheck("${s.label}: primary framing (no fallback)", !f.fellBack, "crop=${f.crop}")
+        gcheck("${s.label}: crown headroom ≥ 4% (was ${room})", room >= 0.04f, "crop=${f.crop}")
+        gcheck("${s.label}: crown→chin 55–70% (was ${headFrac})", headFrac in 0.55f..0.70f, "crop=${f.crop}")
+        gcheck("${s.label}: head strictly inside frame vertically",
+            s.crown > f.crop.y && s.chin < f.crop.y + f.crop.h, "crop=${f.crop}")
     }
 
     // ── Face positions × sizes × image shapes: face must end INSIDE ──────
@@ -85,6 +128,24 @@ fun main() {
             if (!r.fellBack) {
                 gcheck("${img.label} spot$i: normal path keeps the WHOLE face",
                     cov >= 0.99f, "cov=$cov crop=${r.crop} face=($fx,$fy,$fw,$fh)")
+                // Head contract on the primary path: whole head inside,
+                // crown headroom (unless the photo's top forbids it), and
+                // head proportion (unless the window is the largest fit).
+                val head = ppHeadBox(fx, fy, fw, fh)
+                val hTop = head.y.coerceIn(0f, img.h.toFloat())
+                val hBot = (head.y + head.h).coerceIn(0f, img.h.toFloat())
+                gcheck("${img.label} spot$i: whole head inside crop",
+                    hTop >= r.crop.y - 1f && hBot <= r.crop.y + r.crop.h + 1f,
+                    "crop=${r.crop} head=($hTop..$hBot)")
+                val room = (hTop - r.crop.y) / r.crop.h
+                gcheck("${img.label} spot$i: crown headroom ≥ 3.5% or source-limited (was $room)",
+                    room >= 0.035f || r.crop.y <= 0.5f || hTop <= 0.04f * r.crop.h,
+                    "crop=${r.crop} headTop=$hTop")
+                val maxH = minOf(img.h.toFloat(), (img.w / aspect).toFloat())
+                val hFrac = (hBot - hTop) / r.crop.h
+                gcheck("${img.label} spot$i: head fraction 50–75% or largest window (was $hFrac)",
+                    hFrac in 0.50f..0.75f || r.crop.h >= maxH - 1f,
+                    "crop=${r.crop} maxH=$maxH")
             }
         }
     }

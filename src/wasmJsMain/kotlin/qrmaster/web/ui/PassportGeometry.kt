@@ -10,8 +10,11 @@ import kotlin.math.roundToInt
  * math can be unit-tested on the JVM — see qrtest/PassportGeometryTest.kt.
  *
  * The numbers mirror the Android app's PhotoLogic where the two overlap
- * (mm→px at 300 DPI, face framing: face height ≈ 55% of the crop height,
- * face centre at 38% of the crop height, sheet margin 10 mm / gap 5 mm).
+ * (mm→px at 300 DPI, sheet margin 10 mm / gap 5 mm). Face framing is
+ * HEAD-based: the detector's box starts at the forehead, so it is first
+ * expanded into a head box (crown above, chin below — see [ppHeadBox])
+ * and the crop is sized so the crown→chin height is ≈ 64% of the crop
+ * height with the crown ≈ 11% below the crop's top edge.
  * Sizes are common passport/visa photo dimensions only — no claim of
  * official compliance for any country.
  */
@@ -214,36 +217,77 @@ fun ppPaper(id: String): PassportPaper =
 data class PPCrop(val x: Float, val y: Float, val w: Float, val h: Float)
 
 /**
- * Face-based framing, mirroring the Android app: the detected face height
- * is ~55% of the crop height and the face centre sits at 38% of the crop
- * height (eyes in the upper third, headroom above). The window always
- * stays inside the photo and always keeps the target aspect.
+ * Crown allowance: how far the top of the HEAD (crown, incl. hair) sits
+ * above the detector box's top, as a fraction of the box height. The
+ * face-api box starts at the forehead/hairline, NOT the crown. Measured
+ * against the background-removal alpha silhouette on real portraits
+ * (2026-11-24): 0.26 (bald selfie), 0.32–0.42 (short / voluminous hair),
+ * 0.47 (hat-like hair mass). 0.36 plus the headroom margin in
+ * [ppHeadCrop] (together ≈ 0.60 × box height above the box top) covers
+ * the measured range.
+ */
+const val PP_CROWN_FRAC = 0.36f
+
+/** Chin margin: the head box extends this fraction of the box height
+ *  below the detector box's bottom (the box bottom is ~at the chin). */
+const val PP_CHIN_FRAC = 0.04f
+
+/** Target crown→chin height as a fraction of the crop height. Passport
+ *  photos want the head at 55–70% of the frame height; 0.64 centres it. */
+const val PP_HEAD_TARGET = 0.64f
+
+/** Where the crown sits in the crop, as a fraction of the crop height
+ *  (0.11 = 11% of the frame height of clear space above the head). */
+const val PP_HEAD_TOP = 0.11f
+
+/**
+ * Expands a detector face box into a HEAD box: same x/width (the box is
+ * ~ear-to-ear), top moved up by [PP_CROWN_FRAC] × box height (forehead
+ * → crown), bottom moved down by [PP_CHIN_FRAC] × box height. Returned
+ * as a [PPRectF] in source pixels; y may be negative (head partly out
+ * of the photo's top) — callers clamp when they need image bounds.
+ */
+fun ppHeadBox(faceX: Float, faceY: Float, faceW: Float, faceH: Float): PPRectF {
+    val top = faceY - PP_CROWN_FRAC * faceH
+    val bottom = faceY + faceH + PP_CHIN_FRAC * faceH
+    return PPRectF(faceX, top, faceW, bottom - top)
+}
+
+/**
+ * Head-based framing: the crop is sized so the HEAD (crown→chin, see
+ * [ppHeadBox]) fills [target] of the crop height, and positioned so the
+ * crown sits [topFrac] of the crop height below the crop's top edge,
+ * centred horizontally on the face. The window always stays inside the
+ * photo and always keeps the target aspect; when the photo is too small
+ * for the ideal window, the largest aspect window is used.
  * Face box is in source pixels (x, y = top-left).
  */
 fun ppFaceCrop(
     imgW: Int, imgH: Int, aspect: Double,
     faceX: Float, faceY: Float, faceW: Float, faceH: Float
+): PPCrop = ppHeadCrop(imgW, imgH, aspect, faceX, faceY, faceW, faceH, PP_HEAD_TARGET, PP_HEAD_TOP)
+
+/** [ppFaceCrop] with explicit proportion targets (fallback tiers). */
+private fun ppHeadCrop(
+    imgW: Int, imgH: Int, aspect: Double,
+    faceX: Float, faceY: Float, faceW: Float, faceH: Float,
+    target: Float, topFrac: Float
 ): PPCrop {
     if (imgW <= 0 || imgH <= 0 || aspect <= 0 || faceW <= 0f || faceH <= 0f) {
         return ppCentreCrop(imgW, imgH, aspect)
     }
-    val fh = max(1f, faceH)
-    val faceCx = faceX + faceW / 2f
-    val faceCy = faceY + faceH / 2f
-
-    var cropH = fh / 0.55f
+    val head = ppHeadBox(faceX, faceY, faceW, faceH)
+    var cropH = head.h / target
     var cropW = (cropH * aspect).toFloat()
-    if (cropW > imgW) { cropW = imgW.toFloat(); cropH = (cropW / aspect).toFloat() }
-    if (cropH > imgH) { cropH = imgH.toFloat(); cropW = (cropH * aspect).toFloat() }
-    // Never frame tighter than the face itself.
-    val minH = min(imgH.toFloat(), fh * 1.15f)
-    if (cropH < minH) {
-        cropH = minH
-        cropW = (cropH * aspect).toFloat()
-        if (cropW > imgW) { cropW = imgW.toFloat(); cropH = (cropW / aspect).toFloat() }
-    }
-    val left = (faceCx - cropW / 2f).coerceIn(0f, max(0f, imgW - cropW))
-    val top = (faceCy - cropH * 0.38f).coerceIn(0f, max(0f, imgH - cropH))
+    // The window must be wide enough for the face itself.
+    val minW = faceW * 1.04f
+    if (cropW < minW) { cropW = minW; cropH = (cropW / aspect).toFloat() }
+    // Clamp to the largest window of this aspect that fits the photo.
+    val maxH = min(imgH.toFloat(), (imgW / aspect).toFloat())
+    if (cropH > maxH) { cropH = maxH; cropW = (cropH * aspect).toFloat() }
+    val headCx = faceX + faceW / 2f
+    val left = (headCx - cropW / 2f).coerceIn(0f, max(0f, imgW - cropW))
+    val top = (head.y - topFrac * cropH).coerceIn(0f, max(0f, imgH - cropH))
     return PPCrop(left, top, cropW, cropH)
 }
 
@@ -309,35 +353,102 @@ fun ppFaceCoverage(crop: PPCrop, faceX: Float, faceY: Float, faceW: Float, faceH
 data class PPFraming(val crop: PPCrop, val fellBack: Boolean)
 
 /**
- * The ONLY framing entry point the tool may use. Computes the face crop,
- * then VERIFIES it: the face centre must be inside the crop and at least
- * 60% of the face must be covered. If verification fails — e.g. the face
- * box arrived in an unexpected coordinate space — it falls back to the
- * centred crop (which provably contains any in-image face region near
- * the middle band of the photo) and reports the fallback, so a faceless
- * output is impossible rather than merely unlikely.
+ * Verifies a candidate crop against the HEAD framing contract:
+ *  - the crop lies inside the photo;
+ *  - the whole in-image face AND head (crown→chin) lie inside the crop
+ *    (no part of the head touches a frame edge);
+ *  - the crown has real headroom — ≥ ~4% of the frame height — unless
+ *    the source photo itself makes that impossible (the window is
+ *    already at the photo's top, or the crown itself is within 4% of
+ *    the photo's top);
+ *  - the head height is 50–75% of the frame height (the 55–70% output
+ *    target, widened for detector-box variance), unless the window is
+ *    already the largest the photo allows.
+ */
+private fun ppHeadVerify(
+    crop: PPCrop, imgW: Int, imgH: Int, aspect: Double,
+    faceX: Float, faceY: Float, faceW: Float, faceH: Float
+): Boolean {
+    if (crop.w <= 0f || crop.h <= 0f) return false
+    if (crop.x < -0.5f || crop.y < -0.5f ||
+        crop.x + crop.w > imgW + 0.5f || crop.y + crop.h > imgH + 0.5f) return false
+    // In-image part of the face box.
+    val fx0 = faceX.coerceIn(0f, imgW.toFloat())
+    val fy0 = faceY.coerceIn(0f, imgH.toFloat())
+    val fx1 = (faceX + faceW).coerceIn(0f, imgW.toFloat())
+    val fy1 = (faceY + faceH).coerceIn(0f, imgH.toFloat())
+    if (fx1 <= fx0 || fy1 <= fy0) return false
+    if (fx0 < crop.x - 1f || fx1 > crop.x + crop.w + 1f) return false
+    if (fy0 < crop.y - 1f || fy1 > crop.y + crop.h + 1f) return false
+    // In-image part of the head box (crown→chin).
+    val head = ppHeadBox(faceX, faceY, faceW, faceH)
+    val hTop = head.y.coerceIn(0f, imgH.toFloat())
+    val hBot = (head.y + head.h).coerceIn(0f, imgH.toFloat())
+    if (hTop < crop.y - 1f || hBot > crop.y + crop.h + 1f) return false
+    // Crown headroom.
+    val headroom = (hTop - crop.y) / crop.h
+    val sourceLimitedTop = crop.y <= 0.5f || hTop <= 0.04f * crop.h
+    if (headroom < 0.035f && !sourceLimitedTop) return false
+    // Head proportion.
+    val maxWindowH = min(imgH.toFloat(), (imgW / aspect).toFloat())
+    val largest = crop.h >= maxWindowH - 1f
+    val headFrac = (hBot - hTop) / crop.h
+    if (!largest && (headFrac < 0.50f || headFrac > 0.75f)) return false
+    // The face itself must be (essentially) fully covered.
+    val cov = ppFaceCoverage(crop, fx0, fy0, fx1 - fx0, fy1 - fy0)
+    return cov >= 0.99f
+}
+
+/**
+ * The ONLY framing entry point the tool may use. Computes the head-based
+ * face crop, then VERIFIES it against the head contract ([ppHeadVerify]:
+ * whole head inside, crown headroom, head proportion). If verification
+ * fails — e.g. the face box arrived in an unexpected coordinate space —
+ * it falls back through relaxed head framing, a window built directly
+ * around the head box, and finally the centred crop, so a faceless or
+ * crown-cut output is impossible rather than merely unlikely.
  */
 fun ppFaceCropSafe(
     imgW: Int, imgH: Int, aspect: Double,
     faceX: Float, faceY: Float, faceW: Float, faceH: Float
 ): PPFraming {
-    val crop = ppFaceCrop(imgW, imgH, aspect, faceX, faceY, faceW, faceH)
-    val cx = faceX + faceW / 2f
-    val cy = faceY + faceH / 2f
-    val centreInside = cx >= crop.x && cx <= crop.x + crop.w && cy >= crop.y && cy <= crop.y + crop.h
-    val coverage = ppFaceCoverage(crop, faceX, faceY, faceW, faceH)
-    if (centreInside && coverage >= 0.6f) return PPFraming(crop, fellBack = false)
-    val centred = ppCentreCrop(imgW, imgH, aspect)
-    // Even the fallback is verified; if the face is outside even that
-    // (wildly wrong input space), frame the face directly at image scale.
-    val c2 = ppFaceCoverage(centred, faceX, faceY, faceW, faceH)
-    if (c2 >= 0.6f) return PPFraming(centred, fellBack = true)
-    val direct = ppFaceCropRaw(imgW, imgH, aspect, faceX, faceY, faceW, faceH)
-    return PPFraming(direct, fellBack = true)
+    if (imgW <= 0 || imgH <= 0 || aspect <= 0 || faceW <= 0f || faceH <= 0f) {
+        return PPFraming(ppCentreCrop(imgW, imgH, aspect), fellBack = true)
+    }
+    // A box whose centre is outside the photo, or that spills far past
+    // the photo's edges, is in the wrong coordinate space — framing from
+    // it directly would be garbage; go straight to the safe tiers.
+    val centreOutside = faceX + faceW / 2f !in 0f..imgW.toFloat() ||
+        faceY + faceH / 2f !in 0f..imgH.toFloat()
+    val overX = max(0f, -faceX) + max(0f, faceX + faceW - imgW)
+    val overY = max(0f, -faceY) + max(0f, faceY + faceH - imgH)
+    val wrongSpace = centreOutside || overX > 0.35f * faceW || overY > 0.35f * faceH ||
+        faceW > imgW * 1.05f || faceH > imgH * 1.05f
+    if (!wrongSpace) {
+        val crop = ppFaceCrop(imgW, imgH, aspect, faceX, faceY, faceW, faceH)
+        if (ppHeadVerify(crop, imgW, imgH, aspect, faceX, faceY, faceW, faceH)) {
+            return PPFraming(crop, fellBack = false)
+        }
+        val relaxed = ppHeadCrop(imgW, imgH, aspect, faceX, faceY, faceW, faceH, 0.58f, 0.07f)
+        if (ppHeadVerify(relaxed, imgW, imgH, aspect, faceX, faceY, faceW, faceH)) {
+            return PPFraming(relaxed, fellBack = true)
+        }
+    }
+    // Window built directly around the (clamped) head box — the head is
+    // inside by construction wherever the photo allows it.
+    val raw = ppFaceCropRaw(imgW, imgH, aspect, faceX, faceY, faceW, faceH)
+    val fx0 = faceX.coerceIn(0f, imgW.toFloat())
+    val fy0 = faceY.coerceIn(0f, imgH.toFloat())
+    val fw0 = (faceX + faceW).coerceIn(0f, imgW.toFloat()) - fx0
+    val fh0 = (faceY + faceH).coerceIn(0f, imgH.toFloat()) - fy0
+    if (fw0 > 0f && fh0 > 0f && ppFaceCoverage(raw, fx0, fy0, fw0, fh0) >= 0.6f) {
+        return PPFraming(raw, fellBack = true)
+    }
+    return PPFraming(ppCentreCrop(imgW, imgH, aspect), fellBack = true)
 }
 
 /** Last-resort framing: build the window AROUND the (clamped-to-image)
- *  face box itself, ignoring the usual proportions if needed. The face
+ *  head box itself, ignoring the usual proportions if needed. The head
  *  is inside by construction. */
 private fun ppFaceCropRaw(
     imgW: Int, imgH: Int, aspect: Double,
@@ -348,14 +459,14 @@ private fun ppFaceCropRaw(
     val fy = faceY.coerceIn(0f, imgH.toFloat())
     val fw = min(faceW, imgW - fx).coerceAtLeast(1f)
     val fh = min(faceH, imgH - fy).coerceAtLeast(1f)
-    var cropH = max(fh * 1.3f, fh / 0.55f)
+    val head = ppHeadBox(fx, fy, fw, fh)
+    var cropH = head.h / PP_HEAD_TARGET
     var cropW = (cropH * aspect).toFloat()
-    if (cropW > imgW) { cropW = imgW.toFloat(); cropH = (cropW / aspect).toFloat() }
-    if (cropH > imgH) { cropH = imgH.toFloat(); cropW = (cropH * aspect).toFloat() }
+    val maxH = min(imgH.toFloat(), (imgW / aspect).toFloat())
+    if (cropH > maxH) { cropH = maxH; cropW = (cropH * aspect).toFloat() }
     val cx = fx + fw / 2f
-    val cy = fy + fh / 2f
     val x = (cx - cropW / 2f).coerceIn(0f, max(0f, imgW - cropW))
-    val y = (cy - cropH * 0.38f).coerceIn(0f, max(0f, imgH - cropH))
+    val y = (head.y - PP_HEAD_TOP * cropH).coerceIn(0f, max(0f, imgH - cropH))
     return PPCrop(x, y, cropW, cropH)
 }
 
@@ -518,8 +629,9 @@ const val PP_OUTFIT_COLLAR_FRAC = 0.30f
 const val PP_OUTFIT_WIDTH_FRAC = 1.09f
 
 /** Collar height at scale 1, as a fraction of the photo frame height
- *  (just below the chin of the standard face framing). */
-const val PP_OUTFIT_COLLAR_Y_FRAC = 0.68f
+ *  (just below the chin of the standard head framing: crown at 11% +
+ *  head height 64% puts the chin at ~75% of the frame height). */
+const val PP_OUTFIT_COLLAR_Y_FRAC = 0.77f
 
 /**
  * Placement of the outfit overlay inside the rendered photo (output px).
