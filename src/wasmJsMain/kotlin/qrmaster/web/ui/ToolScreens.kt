@@ -189,7 +189,36 @@ fun FileZone(
                     Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    QrIcon(if (spec == PDF_SPEC) IconKind.Pdf else IconKind.Image, PurplePrimary, size = 20.dp)
+                    // Image files show their real photo as a thumbnail —
+                    // a generic icon alone left users guessing which
+                    // photo they had picked.
+                    val isImage = spec != PDF_SPEC && (f.type.startsWith("image/") || spec == IMAGE_SPEC || spec == IMAGE_BATCH_SPEC)
+                    var thumb by remember(f.id) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+                    LaunchedEffect(f.id) {
+                        if (isImage) {
+                            val dataUrl = loadFileDataUrl(f)
+                            if (dataUrl != null) {
+                                // Own async slot per file — the shared
+                                // 'img' slot would clobber parallel rows.
+                                val slot = "thumb:${f.id}"
+                                imgOpKeyed("thumb", "{\"dataUrl\":\"$dataUrl\",\"maxDim\":128}", slot)
+                                val res = awaitAsync(slot, 30_000)
+                                if (res != null && res.asyncOk()) {
+                                    thumb = decodeBitmapFromDataUrl(res.asyncStr("dataUrl"))
+                                }
+                            }
+                        }
+                    }
+                    if (thumb != null) {
+                        androidx.compose.foundation.Image(
+                            thumb!!, contentDescription = f.name,
+                            modifier = Modifier.size(46.dp).clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFE8E6F5)),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    } else {
+                        QrIcon(if (spec == PDF_SPEC) IconKind.Pdf else IconKind.Image, PurplePrimary, size = 20.dp)
+                    }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(f.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = NavyText, maxLines = 1)

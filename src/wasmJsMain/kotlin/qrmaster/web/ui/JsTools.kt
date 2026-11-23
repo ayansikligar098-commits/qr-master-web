@@ -88,6 +88,9 @@ external fun pdfOp(op: String, argsJson: String, key: String)
 @JsFun("(op, argsJson) => { window.__qmImgOp(op, argsJson); }")
 external fun imgOp(op: String, argsJson: String)
 
+@JsFun("(op, argsJson, key) => { window.__qmImgOp(op, argsJson, key); }")
+external fun imgOpKeyed(op: String, argsJson: String, key: String)
+
 @JsFun("(dataUrl) => { window.__qmBgRemove(dataUrl); }")
 external fun bgRemoveStart(dataUrl: String)
 
@@ -102,6 +105,18 @@ external fun faceDetectStart(dataUrl: String, key: String)
 
 @JsFun("(op, argsJson, key) => { window.__qmPassportOp(op, argsJson, key); }")
 external fun passportOp(op: String, argsJson: String, key: String)
+
+@JsFun("(name, json) => { if (window.__qmIdbSave) window.__qmIdbSave(name, json); }")
+external fun idbSave(name: String, json: String)
+
+@JsFun("(name, key) => { if (window.__qmIdbLoad) window.__qmIdbLoad(name, key); }")
+external fun idbLoadStart(name: String, key: String)
+
+@JsFun("(name) => { if (window.__qmIdbClear) window.__qmIdbClear(name); }")
+external fun idbClear(name: String)
+
+@JsFun("() => { if (window.__qmWarmBgModel) window.__qmWarmBgModel(); }")
+external fun warmBgModel()
 
 @JsFun("(url, key) => { window.__qmFetchDataUrl(url, key); }")
 external fun fetchDataUrlStart(url: String, key: String)
@@ -164,7 +179,7 @@ external fun pageBaseUrl(): String
 
 data class WebFile(val id: String, val name: String, val type: String, val size: Long)
 
-private val toolsJson = Json { ignoreUnknownKeys = true }
+val toolsJson = Json { ignoreUnknownKeys = true }
 
 fun parseFileMetas(joined: String): List<WebFile> {
     if (joined.isBlank()) return emptyList()

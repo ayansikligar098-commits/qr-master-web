@@ -50,6 +50,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.foundation.layout.heightIn
+import kotlinx.coroutines.delay
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -140,13 +148,166 @@ private class PpModel {
             val p = ppPaper(paperId)
             return if (p.id == "single") null else ppSheetLayout(p.wMm, p.hMm, sizeWmm, sizeHmm)
         }
+
+    /** Back to a brand-new tool state (the "New photo" action). */
+    fun reset() {
+        stage = PPStage.Landing
+        progress = ""
+        landingError = null
+        note = null
+        fileName = ""
+        originalUrl = ""
+        cutoutUrl = ""
+        bgFailed = false
+        imgW = 0
+        imgH = 0
+        faceBox = null
+        crop = PPCrop(0f, 0f, 0f, 0f)
+        presetId = "in"
+        customW = 35.0
+        customH = 45.0
+        search = ""
+        paperId = "single"
+        bgId = "white"
+        customR = 136
+        customG = 184
+        customB = 232
+        jpg = false
+        outfitCat = PP_OUTFIT_CATEGORIES[0]
+        outfitId = null
+        outfitScale = 1f
+        outfitShift = 0f
+        outfitUrls = emptyMap()
+        outfitLoading = false
+        view = PPViewMode.Result
+        tab = 0
+        cropOpen = false
+        busy = false
+        dlError = null
+    }
+}
+
+/**
+ * The Passport session, held OUTSIDE the composable on purpose — the app
+ * shell swaps layouts at the 760 dp breakpoint, which disposes and
+ * recreates this screen; with the model only in `remember`, crossing
+ * that breakpoint (resize, rotation, tab restore) threw away the photo
+ * and every setting. Mirrors the PDF Editor's PdfEditorDocCache fix.
+ * On top of this, the session is also persisted to IndexedDB (see
+ * ppSaveSession) so even a full page reload restores it.
+ */
+private object PpSessionCache {
+    var model: PpModel? = null
+    var files: List<WebFile> = emptyList()
+    var restoreTried: Boolean = false
+}
+
+private const val PP_IDB_NAME = "passport-session"
+
+private fun ppJsonEsc(s: String): String =
+    s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+/** Serialises the maker session for IndexedDB (photo + cut-out as data
+ *  URLs, plus every setting). Data URLs are base64 — JSON-safe as-is. */
+private fun ppSessionJson(m: PpModel): String {
+    val face = m.faceBox
+    val faceJson = if (face != null) "[${face[0]},${face[1]},${face[2]},${face[3]}]" else "null"
+    val presetJson = if (m.presetId != null) "\"${ppJsonEsc(m.presetId!!)}\"" else "null"
+    val outfitJson = if (m.outfitId != null) "\"${ppJsonEsc(m.outfitId!!)}\"" else "null"
+    return "{" +
+        "\"v\":1,\"fileName\":\"${ppJsonEsc(m.fileName)}\"," +
+        "\"originalUrl\":\"${m.originalUrl}\",\"cutoutUrl\":\"${m.cutoutUrl}\"," +
+        "\"bgFailed\":${m.bgFailed},\"imgW\":${m.imgW},\"imgH\":${m.imgH}," +
+        "\"face\":$faceJson,\"crop\":[${m.crop.x},${m.crop.y},${m.crop.w},${m.crop.h}]," +
+        "\"presetId\":$presetJson,\"customW\":${m.customW},\"customH\":${m.customH}," +
+        "\"paperId\":\"${ppJsonEsc(m.paperId)}\",\"bgId\":\"${ppJsonEsc(m.bgId)}\"," +
+        "\"customR\":${m.customR},\"customG\":${m.customG},\"customB\":${m.customB}," +
+        "\"jpg\":${m.jpg},\"outfitId\":$outfitJson,\"outfitCat\":\"${ppJsonEsc(m.outfitCat)}\"," +
+        "\"outfitScale\":${m.outfitScale},\"outfitShift\":${m.outfitShift}," +
+        "\"view\":\"${m.view.name}\",\"tab\":${m.tab}}"
+}
+
+private fun ppSaveSession(m: PpModel) {
+    if (m.originalUrl.isBlank() || m.cutoutUrl.isBlank() || m.imgW <= 0) return
+    idbSave(PP_IDB_NAME, ppSessionJson(m))
+}
+
+/** Restores a session saved by [ppSaveSession]; lands in the Maker. */
+private fun ppRestoreSession(m: PpModel, json: String): Boolean {
+    val root = try {
+        toolsJson.parseToJsonElement(json).jsonObject
+    } catch (e: Exception) {
+        return false
+    }
+    val original = root.asyncStr("originalUrl")
+    val cutout = root.asyncStr("cutoutUrl")
+    val iw = root.asyncStr("imgW").toIntOrNull() ?: 0
+    val ih = root.asyncStr("imgH").toIntOrNull() ?: 0
+    if (original.isBlank() || cutout.isBlank() || iw <= 0 || ih <= 0) return false
+    m.fileName = root.asyncStr("fileName")
+    m.originalUrl = original
+    m.cutoutUrl = cutout
+    m.bgFailed = root.asyncStr("bgFailed") == "true"
+    m.imgW = iw
+    m.imgH = ih
+    val faceArr = root["face"] as? kotlinx.serialization.json.JsonArray
+    m.faceBox = if (faceArr != null && faceArr.size == 4) {
+        FloatArray(4) { i -> faceArr[i].jsonPrimitive.content.toFloatOrNull() ?: 0f }
+    } else null
+    val cropArr = root["crop"] as? kotlinx.serialization.json.JsonArray
+    if (cropArr != null && cropArr.size == 4) {
+        val c = FloatArray(4) { i -> cropArr[i].jsonPrimitive.content.toFloatOrNull() ?: 0f }
+        if (c[2] > 0f && c[3] > 0f) m.crop = PPCrop(c[0], c[1], c[2], c[3])
+    }
+    if (m.crop.w <= 0f) m.reframe()
+    m.presetId = (root["presetId"] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.let { if (it.isString) it.content else null }
+    m.customW = root.asyncStr("customW").toDoubleOrNull() ?: 35.0
+    m.customH = root.asyncStr("customH").toDoubleOrNull() ?: 45.0
+    m.paperId = root.asyncStr("paperId").ifBlank { "single" }
+    m.bgId = root.asyncStr("bgId").ifBlank { "white" }
+    m.customR = root.asyncStr("customR").toIntOrNull() ?: 136
+    m.customG = root.asyncStr("customG").toIntOrNull() ?: 184
+    m.customB = root.asyncStr("customB").toIntOrNull() ?: 232
+    m.jpg = root.asyncStr("jpg") == "true"
+    m.outfitId = (root["outfitId"] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.let { if (it.isString) it.content else null }
+    m.outfitCat = root.asyncStr("outfitCat").ifBlank { PP_OUTFIT_CATEGORIES[0] }
+    m.outfitScale = root.asyncStr("outfitScale").toFloatOrNull() ?: 1f
+    m.outfitShift = root.asyncStr("outfitShift").toFloatOrNull() ?: 0f
+    m.view = if (root.asyncStr("view") == "Cutout") PPViewMode.Cutout
+        else if (root.asyncStr("view") == "Original") PPViewMode.Original
+        else PPViewMode.Result
+    m.tab = root.asyncStr("tab").toIntOrNull() ?: 0
+    m.note = "Your last photo was restored — pick up right where you left off, or tap “New photo” to start over."
+    m.stage = PPStage.Maker
+    return true
 }
 
 @Composable
 fun PassportPhotoScreen(state: AppState) {
     val scope = rememberCoroutineScope()
-    val m = remember { PpModel() }
-    var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
+    val m = remember { PpSessionCache.model ?: PpModel().also { PpSessionCache.model = it } }
+    var files by remember { mutableStateOf(PpSessionCache.files) }
+
+    // Keep the picked-file list in the session cache too (breakpoint-safe).
+    LaunchedEffect(files) { PpSessionCache.files = files }
+
+    // Warm the background-removal model cache in the background, and
+    // restore any session saved in IndexedDB (tab discard / reload) —
+    // the user returns to the Maker with photo + settings intact.
+    LaunchedEffect(Unit) {
+        warmBgModel()
+        if (!PpSessionCache.restoreTried) {
+            PpSessionCache.restoreTried = true
+            if (m.stage == PPStage.Landing && m.originalUrl.isBlank()) {
+                idbLoadStart(PP_IDB_NAME, "pp:restore")
+                val res = awaitAsync("pp:restore", 10_000)
+                val json = if (res != null && res.asyncOk()) res.asyncStr("json") else ""
+                if (json.isNotBlank()) ppRestoreSession(m, json)
+            }
+        }
+    }
 
     // Pasted images land in the shared dropped queue while this tool is open.
     DisposableEffect(Unit) {
@@ -185,7 +346,7 @@ fun PassportPhotoScreen(state: AppState) {
                         }
                         Text(
                             "Upload a photo and it is prepared automatically: background removed, face centred and cropped to the passport size. " +
-                                "First use downloads the background-removal model (about 40 MB); after that it is cached. Your photo never leaves this device.",
+                                "First use downloads the photo model once (about 60 MB); it stays cached on your device, so later visits start instantly. Your photo never leaves this device.",
                             fontSize = 12.sp, color = MutedText
                         )
                         if (m.landingError != null) {
@@ -202,6 +363,19 @@ fun PassportPhotoScreen(state: AppState) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
+                        // The uploaded photo stays visible while it is
+                        // being prepared — never a bare spinner.
+                        val procBmp = remember(m.originalUrl) {
+                            if (m.originalUrl.isBlank()) null else decodeBitmapFromDataUrl(m.originalUrl)
+                        }
+                        if (procBmp != null) {
+                            Image(
+                                procBmp, contentDescription = "Your uploaded photo",
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp)
+                                    .clip(RoundedCornerShape(10.dp)).background(Color(0xFFF1EFFD)),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
                         CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(38.dp))
                         Text("Preparing your photo…", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = NavyText)
                         if (m.progress.isNotBlank()) Text(m.progress, fontSize = 12.5.sp, color = MutedText)
@@ -212,9 +386,8 @@ fun PassportPhotoScreen(state: AppState) {
             PPStage.Maker -> item {
                 PpMaker(state, m, scope, onNewPhoto = {
                     files = emptyList()
-                    m.stage = PPStage.Landing
-                    m.outfitId = null
-                    m.cropOpen = false
+                    idbClear(PP_IDB_NAME)
+                    m.reset()
                 })
             }
         }
@@ -272,7 +445,14 @@ private suspend fun processPhoto(m: PpModel, f: WebFile, state: AppState) {
         val fw = faceRes.asyncStr("w").toFloatOrNull() ?: 0f
         val fh = faceRes.asyncStr("h").toFloatOrNull() ?: 0f
         m.faceBox = floatArrayOf(fx, fy, fw, fh)
-        m.crop = ppFaceCrop(iw, ih, m.aspect, fx, fy, fw, fh)
+        // Guarded framing: the crop is verified to contain the face; if
+        // the detected box ever arrives in a wrong coordinate space, the
+        // guard falls back instead of producing a faceless photo.
+        val framing = ppFaceCropSafe(iw, ih, m.aspect, fx, fy, fw, fh)
+        m.crop = framing.crop
+        if (framing.fellBack) {
+            notes.add("The photo was framed automatically. Use “Crop / Choose area” if you want to adjust it.")
+        }
     } else {
         m.faceBox = null
         m.crop = ppCentreCrop(iw, ih, m.aspect)
@@ -284,6 +464,8 @@ private suspend fun processPhoto(m: PpModel, f: WebFile, state: AppState) {
     m.note = if (notes.isEmpty()) null else notes.joinToString(" ")
     m.stage = PPStage.Maker
     m.view = PPViewMode.Result
+    // Persist the finished session so a discarded/reloaded tab restores it.
+    ppSaveSession(m)
 }
 
 @Composable
@@ -293,6 +475,15 @@ private fun PpMaker(
     scope: CoroutineScope,
     onNewPhoto: () -> Unit
 ) {
+    // Persist every maker change (debounced) so a discarded or reloaded
+    // tab restores photo + settings exactly as they were.
+    LaunchedEffect(
+        m.bgId, m.customR, m.customG, m.customB, m.outfitId, m.outfitScale, m.outfitShift,
+        m.paperId, m.presetId, m.customW, m.customH, m.crop, m.jpg, m.view, m.tab
+    ) {
+        delay(600)
+        ppSaveSession(m)
+    }
     if (m.cropOpen) {
         PpCropEditor(m)
         return
@@ -361,7 +552,7 @@ private fun PpPreview(m: PpModel) {
         }
         when (m.view) {
             PPViewMode.Result -> PpResultPreview(m, cutoutBmp, outfitBmp)
-            PPViewMode.Cutout -> PpFitPreview(cutoutBmp, m.imgW, m.imgH, checker = true)
+            PPViewMode.Cutout -> PpCutoutPreview(m, cutoutBmp, outfitBmp)
             PPViewMode.Original -> PpOriginalPreview(m, originalBmp)
         }
         Text(
@@ -372,37 +563,108 @@ private fun PpPreview(m: PpModel) {
 }
 
 @Composable
-private fun PpResultPreview(m: PpModel, cutoutBmp: androidx.compose.ui.graphics.ImageBitmap?, outfitBmp: androidx.compose.ui.graphics.ImageBitmap?) {
+private fun PpResultPreview(m: PpModel, cutoutBmp: ImageBitmap?, outfitBmp: ImageBitmap?) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val frameW = min(maxWidth.value, 430f)
         val frameH = (frameW / m.aspect).toFloat()
         val bg = m.bgDef
-        val bgMod = if (bg.isGradient) {
-            Modifier.background(Brush.verticalGradient(listOf(ppParseHex(bg.colors[0]), ppParseHex(bg.colors[1]))))
-        } else {
-            Modifier.background(ppParseHex(bg.colors[0]))
-        }
         Box(
-            Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp)).then(bgMod)
+            Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp))
                 .border(1.dp, Color(0xFFDDD6F3), RoundedCornerShape(10.dp))
         ) {
-            if (cutoutBmp != null && m.imgW > 0) {
-                val t = ppPreviewTransform(frameW, frameH, m.crop, m.imgW, m.imgH)
-                Image(
-                    cutoutBmp, contentDescription = "Passport photo preview",
-                    modifier = Modifier.offset(t.left.dp, t.top.dp).size(t.imgW.dp, t.imgH.dp),
-                    contentScale = ContentScale.FillBounds
-                )
+            // The preview draws the crop region into the frame with an
+            // explicit src→dst rect — the exact mapping the download
+            // render uses. (The previous offset+size Image layout did
+            // not hold in the web runtime: the bitmap filled the frame
+            // and the offset shifted the whole photo up, pushing the
+            // face out of the frame.)
+            Canvas(Modifier.fillMaxSize()) {
+                if (bg.isGradient) {
+                    drawRect(Brush.verticalGradient(listOf(ppParseHex(bg.colors[0]), ppParseHex(bg.colors[1]))))
+                } else {
+                    drawRect(ppParseHex(bg.colors[0]))
+                }
+                if (cutoutBmp != null && m.crop.w > 0f && m.crop.h > 0f) {
+                    drawImage(
+                        image = cutoutBmp,
+                        srcOffset = IntOffset(m.crop.x.roundToInt(), m.crop.y.roundToInt()),
+                        srcSize = IntSize(m.crop.w.roundToInt().coerceAtLeast(1), m.crop.h.roundToInt().coerceAtLeast(1)),
+                        dstOffset = IntOffset.Zero,
+                        dstSize = IntSize(size.width.roundToInt().coerceAtLeast(1), size.height.roundToInt().coerceAtLeast(1)),
+                        filterQuality = FilterQuality.High
+                    )
+                }
+                if (outfitBmp != null && m.outW > 0 && m.outH > 0) {
+                    val r = ppOutfitRect(m.outW, m.outH, m.outfitScale, m.outfitShift)
+                    drawImage(
+                        image = outfitBmp,
+                        dstOffset = IntOffset(
+                            (r.x.toFloat() / m.outW * size.width).roundToInt(),
+                            (r.y.toFloat() / m.outH * size.height).roundToInt()
+                        ),
+                        dstSize = IntSize(
+                            (r.w.toFloat() / m.outW * size.width).roundToInt().coerceAtLeast(1),
+                            (r.h.toFloat() / m.outH * size.height).roundToInt().coerceAtLeast(1)
+                        ),
+                        filterQuality = FilterQuality.High
+                    )
+                }
             }
-            if (outfitBmp != null) {
-                val r = ppOutfitRect(m.outW, m.outH, m.outfitScale, m.outfitShift)
-                Image(
-                    outfitBmp, contentDescription = "Outfit overlay",
-                    modifier = Modifier
-                        .offset((r.x.toFloat() / m.outW * frameW).dp, (r.y.toFloat() / m.outH * frameH).dp)
-                        .size((r.w.toFloat() / m.outW * frameW).dp, (r.h.toFloat() / m.outH * frameH).dp),
-                    contentScale = ContentScale.FillBounds
-                )
+        }
+    }
+}
+
+/**
+ * The Cut-out view: the full photo on a checkerboard (background stays
+ * transparent here), WITH the chosen outfit drawn on the person — the
+ * outfit is part of the person layer, so it shows in this view too.
+ */
+@Composable
+private fun PpCutoutPreview(m: PpModel, bmp: ImageBitmap?, outfitBmp: ImageBitmap?) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val frameW = min(maxWidth.value, 430f)
+        val aspect = if (m.imgW > 0 && m.imgH > 0) m.imgW.toDouble() / m.imgH else 1.0
+        val frameH = (frameW / aspect).toFloat().coerceAtMost(520f)
+        Box(
+            Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp))
+                .border(1.dp, Color(0xFFDDD6F3), RoundedCornerShape(10.dp))
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val cell = 14.dp.toPx()
+                var yy = 0
+                var y = 0f
+                while (y < size.height) {
+                    var xx = 0
+                    var x = 0f
+                    while (x < size.width) {
+                        if ((xx + yy) % 2 == 0) drawRect(Color(0xFFE3E1EF), Offset(x, y), androidx.compose.ui.geometry.Size(cell, cell))
+                        x += cell; xx++
+                    }
+                    y += cell; yy++
+                }
+                if (bmp != null && m.imgW > 0 && m.imgH > 0) {
+                    val s = min(size.width / m.imgW, size.height / m.imgH)
+                    val dw = m.imgW * s
+                    val dh = m.imgH * s
+                    val dx = (size.width - dw) / 2f
+                    val dy = (size.height - dh) / 2f
+                    drawImage(
+                        image = bmp,
+                        dstOffset = IntOffset(dx.roundToInt(), dy.roundToInt()),
+                        dstSize = IntSize(dw.roundToInt().coerceAtLeast(1), dh.roundToInt().coerceAtLeast(1)),
+                        filterQuality = FilterQuality.High
+                    )
+                    if (outfitBmp != null && m.crop.w > 0f && m.outW > 0 && m.outH > 0) {
+                        val rOut = ppOutfitRect(m.outW, m.outH, m.outfitScale, m.outfitShift)
+                        val rs = ppOutfitRectInSource(m.crop, rOut, m.outW, m.outH)
+                        drawImage(
+                            image = outfitBmp,
+                            dstOffset = IntOffset((dx + rs.x * s).roundToInt(), (dy + rs.y * s).roundToInt()),
+                            dstSize = IntSize((rs.w * s).roundToInt().coerceAtLeast(1), (rs.h * s).roundToInt().coerceAtLeast(1)),
+                            filterQuality = FilterQuality.High
+                        )
+                    }
+                }
             }
         }
     }
@@ -497,8 +759,10 @@ private fun PpTabs(m: PpModel, scope: CoroutineScope) {
 
 private fun PpModel.reframe() {
     val fb = faceBox
-    crop = if (fb != null) ppFaceCrop(imgW, imgH, aspect, fb[0], fb[1], fb[2], fb[3])
+    crop = if (fb != null) ppFaceCropSafe(imgW, imgH, aspect, fb[0], fb[1], fb[2], fb[3]).crop
     else ppCentreCrop(imgW, imgH, aspect)
+    // A size change alters the framing — show its effect immediately.
+    view = PPViewMode.Result
 }
 
 @Composable
@@ -577,7 +841,7 @@ private fun PpSizeTab(m: PpModel) {
             label = "Paper Size (print sheet)",
             options = PP_PAPER_OPTIONS.map { it.label },
             selected = PP_PAPER_OPTIONS.indexOfFirst { it.id == m.paperId }.coerceAtLeast(0),
-            onSelect = { i -> m.paperId = PP_PAPER_OPTIONS[i].id }
+            onSelect = { i -> m.paperId = PP_PAPER_OPTIONS[i].id; m.view = PPViewMode.Result }
         )
         val sh = m.sheet
         Text(
@@ -625,9 +889,9 @@ private fun PpBackgroundTab(m: PpModel) {
         }
         if (m.bgId == "custom") {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                PpRgbSlider("Red", m.customR) { m.customR = it }
-                PpRgbSlider("Green", m.customG) { m.customG = it }
-                PpRgbSlider("Blue", m.customB) { m.customB = it }
+                PpRgbSlider("Red", m.customR) { m.customR = it; m.view = PPViewMode.Result }
+                PpRgbSlider("Green", m.customG) { m.customG = it; m.view = PPViewMode.Result }
+                PpRgbSlider("Blue", m.customB) { m.customB = it; m.view = PPViewMode.Result }
                 Text("Colour: ${ppHex(m.customR, m.customG, m.customB)}", fontSize = 12.sp, color = MutedText)
             }
         }
@@ -670,7 +934,7 @@ private fun PpSwatch(m: PpModel, bg: PPBackground) {
                     if (selected) PurplePrimary else Color(0xFFD8D2EA),
                     RoundedCornerShape(10.dp)
                 )
-                .clickable { m.bgId = bg.id }
+                .clickable { m.bgId = bg.id; m.view = PPViewMode.Result }
         )
         Spacer(Modifier.height(4.dp))
         Text(bg.name, fontSize = 10.5.sp, color = if (selected) PurplePrimary else MutedText, maxLines = 2)
@@ -696,7 +960,7 @@ private fun PpOutfitTab(m: PpModel, scope: CoroutineScope) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = m.outfitId == null,
-                onClick = { m.outfitId = null },
+                onClick = { m.outfitId = null; m.view = PPViewMode.Result },
                 label = { Text("None", fontSize = 12.5.sp) },
                 shape = RoundedCornerShape(20.dp),
                 colors = FilterChipDefaults.filterChipColors(
@@ -734,7 +998,7 @@ private fun PpOutfitTab(m: PpModel, scope: CoroutineScope) {
                                 if (m.outfitId == o.id) PurplePrimary else Color(0xFFD8D2EA),
                                 RoundedCornerShape(10.dp)
                             )
-                            .clickable { m.outfitId = o.id }
+                            .clickable { m.outfitId = o.id; m.view = PPViewMode.Result }
                     ) {
                         if (bmp != null) {
                             Image(bmp, contentDescription = o.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
@@ -748,9 +1012,9 @@ private fun PpOutfitTab(m: PpModel, scope: CoroutineScope) {
         if (m.outfitId != null) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Outfit size: ${(m.outfitScale * 100).roundToInt()}%", fontSize = 12.5.sp, color = MutedText)
-                Slider(value = m.outfitScale, onValueChange = { m.outfitScale = it }, valueRange = 0.8f..1.3f)
+                Slider(value = m.outfitScale, onValueChange = { m.outfitScale = it; m.view = PPViewMode.Result }, valueRange = 0.8f..1.3f)
                 Text("Outfit position", fontSize = 12.5.sp, color = MutedText)
-                Slider(value = m.outfitShift, onValueChange = { m.outfitShift = it }, valueRange = -0.08f..0.08f)
+                Slider(value = m.outfitShift, onValueChange = { m.outfitShift = it; m.view = PPViewMode.Result }, valueRange = -0.08f..0.08f)
             }
         }
         Text(

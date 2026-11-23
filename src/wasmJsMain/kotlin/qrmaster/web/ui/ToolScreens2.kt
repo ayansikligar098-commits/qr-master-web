@@ -327,13 +327,17 @@ fun RemoveBgScreen(state: AppState) {
     val file = files.firstOrNull()
     val resultBitmap = remember(resultUrl) { resultUrl?.let { decodeBitmapFromDataUrl(it) } }
 
+    // Start warming the model cache as soon as this tool opens, so the
+    // download is already done (or well along) when the user clicks.
+    LaunchedEffect(Unit) { warmBgModel() }
+
     ToolPage(IconKind.Star, "Remove Background", "Remove the background from a photo — processed on your device in the browser.") {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                     FileZone(state, files, IMAGE_SPEC, "PNG or JPG photo (max 15 MB)") { files = it.take(1) }
                     Text(
-                        "First use downloads the removal model (about 40 MB) — after that it is cached. Your photo never leaves this device.",
+                        "First use downloads the removal model once (about 60 MB) — it stays cached on your device, so later visits start instantly. Your photo never leaves this device.",
                         fontSize = 12.sp, color = MutedText
                     )
                     PrimaryToolButton("Remove Background", enabled = file != null, busy = busy) {

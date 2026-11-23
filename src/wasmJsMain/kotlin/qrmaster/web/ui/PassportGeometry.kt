@@ -290,6 +290,94 @@ fun ppZoomShift(
     return PPCrop(x, y, cw, ch)
 }
 
+/**
+ * Defensive framing invariant: the fraction of the face box's area that
+ * lies inside [crop] (0..1), or -1 when the face box is degenerate.
+ * A correct face framing keeps the WHOLE face inside the crop; anything
+ * below ~0.6 means the mapping between the detection space and the image
+ * space went wrong somewhere upstream.
+ */
+fun ppFaceCoverage(crop: PPCrop, faceX: Float, faceY: Float, faceW: Float, faceH: Float): Float {
+    if (faceW <= 0f || faceH <= 0f || crop.w <= 0f || crop.h <= 0f) return -1f
+    val ix = max(0f, min(faceX + faceW, crop.x + crop.w) - max(faceX, crop.x))
+    val iy = max(0f, min(faceY + faceH, crop.y + crop.h) - max(faceY, crop.y))
+    return (ix * iy) / (faceW * faceH)
+}
+
+/** Result of the guarded framing: the crop to use + whether the guard
+ *  had to fall back because the face did not land inside the frame. */
+data class PPFraming(val crop: PPCrop, val fellBack: Boolean)
+
+/**
+ * The ONLY framing entry point the tool may use. Computes the face crop,
+ * then VERIFIES it: the face centre must be inside the crop and at least
+ * 60% of the face must be covered. If verification fails — e.g. the face
+ * box arrived in an unexpected coordinate space — it falls back to the
+ * centred crop (which provably contains any in-image face region near
+ * the middle band of the photo) and reports the fallback, so a faceless
+ * output is impossible rather than merely unlikely.
+ */
+fun ppFaceCropSafe(
+    imgW: Int, imgH: Int, aspect: Double,
+    faceX: Float, faceY: Float, faceW: Float, faceH: Float
+): PPFraming {
+    val crop = ppFaceCrop(imgW, imgH, aspect, faceX, faceY, faceW, faceH)
+    val cx = faceX + faceW / 2f
+    val cy = faceY + faceH / 2f
+    val centreInside = cx >= crop.x && cx <= crop.x + crop.w && cy >= crop.y && cy <= crop.y + crop.h
+    val coverage = ppFaceCoverage(crop, faceX, faceY, faceW, faceH)
+    if (centreInside && coverage >= 0.6f) return PPFraming(crop, fellBack = false)
+    val centred = ppCentreCrop(imgW, imgH, aspect)
+    // Even the fallback is verified; if the face is outside even that
+    // (wildly wrong input space), frame the face directly at image scale.
+    val c2 = ppFaceCoverage(centred, faceX, faceY, faceW, faceH)
+    if (c2 >= 0.6f) return PPFraming(centred, fellBack = true)
+    val direct = ppFaceCropRaw(imgW, imgH, aspect, faceX, faceY, faceW, faceH)
+    return PPFraming(direct, fellBack = true)
+}
+
+/** Last-resort framing: build the window AROUND the (clamped-to-image)
+ *  face box itself, ignoring the usual proportions if needed. The face
+ *  is inside by construction. */
+private fun ppFaceCropRaw(
+    imgW: Int, imgH: Int, aspect: Double,
+    faceX: Float, faceY: Float, faceW: Float, faceH: Float
+): PPCrop {
+    if (imgW <= 0 || imgH <= 0 || aspect <= 0) return ppCentreCrop(imgW, imgH, aspect)
+    val fx = faceX.coerceIn(0f, imgW.toFloat())
+    val fy = faceY.coerceIn(0f, imgH.toFloat())
+    val fw = min(faceW, imgW - fx).coerceAtLeast(1f)
+    val fh = min(faceH, imgH - fy).coerceAtLeast(1f)
+    var cropH = max(fh * 1.3f, fh / 0.55f)
+    var cropW = (cropH * aspect).toFloat()
+    if (cropW > imgW) { cropW = imgW.toFloat(); cropH = (cropW / aspect).toFloat() }
+    if (cropH > imgH) { cropH = imgH.toFloat(); cropW = (cropH * aspect).toFloat() }
+    val cx = fx + fw / 2f
+    val cy = fy + fh / 2f
+    val x = (cx - cropW / 2f).coerceIn(0f, max(0f, imgW - cropW))
+    val y = (cy - cropH * 0.38f).coerceIn(0f, max(0f, imgH - cropH))
+    return PPCrop(x, y, cropW, cropH)
+}
+
+/**
+ * Maps an outfit rect given in OUTPUT-photo space (the cropped photo,
+ * [outW]×[outH] px) back into SOURCE-image space, so the Cut-out view
+ * (which shows the full uncropped photo) can draw the same overlay.
+ */
+fun ppOutfitRectInSource(crop: PPCrop, r: PPSheetCell, outW: Int, outH: Int): PPRectF {
+    if (outW <= 0 || outH <= 0 || crop.w <= 0f || crop.h <= 0f) {
+        return PPRectF(crop.x, crop.y, crop.w, crop.h)
+    }
+    return PPRectF(
+        x = crop.x + (r.x.toFloat() / outW) * crop.w,
+        y = crop.y + (r.y.toFloat() / outH) * crop.h,
+        w = (r.w.toFloat() / outW) * crop.w,
+        h = (r.h.toFloat() / outH) * crop.h
+    )
+}
+
+data class PPRectF(val x: Float, val y: Float, val w: Float, val h: Float)
+
 /** How to draw the full source image inside the preview frame so that
  *  exactly [crop] fills the frame. All values in frame (display) units. */
 data class PPPreviewTransform(
