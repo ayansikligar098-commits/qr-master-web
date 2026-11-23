@@ -62,7 +62,7 @@ import qrmaster.web.data.ensureReferralProfile
 enum class Screen {
     Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Tasks,
     Settings, Premium, Login, Placeholder,
-    Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage,
+    Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage, PdfEditor,
     AgeCalc, BmiCalc, UnitConvert, CurrencyConvert, PercentCalc,
     Bonus, Invite, History, Notifications, Support, About
 }

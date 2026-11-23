@@ -206,6 +206,7 @@ fun ScreenContent(state: AppState) {
         Screen.PercentCalc -> PercentScreen(state)
         Screen.CompressPdf -> CompressPdfScreen(state)
         Screen.CompressImage -> CompressImageScreen(state)
+        Screen.PdfEditor -> PdfEditorScreen(state)
         Screen.Bonus -> BonusScreen(state)
         Screen.Invite -> InviteScreen(state)
         Screen.History -> HistoryScreen(state)
@@ -562,6 +563,7 @@ fun AllToolsScreen(state: AppState) {
         ToolCardDef("Barcode Generator", "", "QR Tools", IconKind.Barcode, Color(0xFF334155)) { it.navigate(Screen.Barcode) }
     )
     val pdfTools = listOf(
+        ToolCardDef("PDF Editor", "", "PDF Tools", IconKind.Edit, Color(0xFF7C3AED)) { it.navigate(Screen.PdfEditor) },
         ToolCardDef("PDF Converter", "", "PDF Tools", IconKind.Pdf, Color(0xFFE11D48)) { it.navigate(Screen.PdfConverter) },
         ToolCardDef("Merge PDF", "", "PDF Tools", IconKind.Merge, Color(0xFFDC2626)) { it.openPdf("Merge PDF") },
         ToolCardDef("Split PDF", "", "PDF Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.openPdf("Split PDF") },
@@ -1104,6 +1106,7 @@ fun PdfConverterScreen(state: AppState) {
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 listOf(
+                    Triple("PDF Editor", IconKind.Edit, Color(0xFF7C3AED)),
                     Triple("Merge PDF", IconKind.Merge, Color(0xFFDC2626)),
                     Triple("Split PDF", IconKind.FileText, Color(0xFF7C3AED)),
                     Triple("Compress PDF", IconKind.Compress, Color(0xFFEA580C)),
@@ -1122,6 +1125,7 @@ fun PdfConverterScreen(state: AppState) {
                             )
                             .clickable {
                                 if (name == "Compress PDF") state.navigate(Screen.CompressPdf)
+                                else if (name == "PDF Editor") state.navigate(Screen.PdfEditor)
                                 else selectedTool = name
                             }
                             .padding(9.dp),

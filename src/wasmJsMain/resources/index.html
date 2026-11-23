@@ -188,6 +188,10 @@
                     }
                     var ibytes = await idoc.save();
                     qmSetAsync(key, { ok: true, b64: qmBytesToB64(ibytes), pages: idoc.getPageCount() });
+                } else if (op === 'renderPage') {
+                    if (typeof pdfjsLib === 'undefined') throw new Error('PDF viewer library is still loading. Try again in a moment.');
+                    var rp = await qmEditorRenderPage(args.pdf, args.page || 1, args.scale || 1.6, args.rotation || 0);
+                    qmSetAsync(key, { ok: true, pages: rp.pages, image: rp.image, pw: rp.pw, ph: rp.ph });
                 } else if (op === 'render') {
                     if (typeof pdfjsLib === 'undefined') throw new Error('PDF viewer library is still loading. Try again in a moment.');
                     var task = pdfjsLib.getDocument({ data: qmB64ToBytes(args.pdf) });
@@ -580,6 +584,195 @@
         s.onerror = function () { qmSetAsync(key, { ok: false, error: 'Could not load the QR scanner. Check your connection.' }); };
         document.head.appendChild(s);
     };
+
+    // ── PDF Editor core (shared by the shell page and the Node test) ────────
+    // qmEditorRenderPage: render ONE page at an absolute (total) rotation.
+    // qmEditorExport: rebuild the document in editor page order and burn the
+    // overlay objects onto the real pages with pdf-lib. Overlay geometry is in
+    // DISPLAYED points (origin top-left, as the user sees the page); helpers
+    // convert to native PDF points (origin bottom-left, unrotated page space).
+    function qmHexRgb(hex) {
+        var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+        if (!m) return PDFLib.rgb(0, 0, 0);
+        var v = parseInt(m[1], 16);
+        return PDFLib.rgb(((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255);
+    }
+    function qmPt(dx, dy, W, H, R) {
+        if (R === 90) return [dy, dx];
+        if (R === 180) return [W - dx, dy];
+        if (R === 270) return [W - dy, H - dx];
+        return [dx, H - dy];
+    }
+    function qmRect(x, y, w, h, W, H, R) {
+        var a = qmPt(x, y, W, H, R), b = qmPt(x + w, y + h, W, H, R);
+        return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w: Math.abs(b[0] - a[0]), h: Math.abs(b[1] - a[1]) };
+    }
+    // Render text to a transparent PNG (browser only; returns null headless).
+    // Used for watermarks and for text placed on rotated pages, where pdf-lib
+    // cannot rotate native text. Returns { dataUrl, w, h } in points.
+    function qmTextPng(text, size, hex, bold, rotateDeg, alpha) {
+        try {
+            if (typeof document === 'undefined') return null;
+            var S = 3;
+            var lines = ('' + text).split('\n');
+            var cv = document.createElement('canvas');
+            var ctx = cv.getContext('2d');
+            var fontSpec = (bold ? '700 ' : '400 ') + (size * S) + 'px Arial, Helvetica, sans-serif';
+            ctx.font = fontSpec;
+            var tw = 0;
+            for (var i = 0; i < lines.length; i++) tw = Math.max(tw, ctx.measureText(lines[i]).width);
+            var th = lines.length * size * S * 1.22;
+            var rad = Math.abs(rotateDeg || 0) * Math.PI / 180;
+            var bw = Math.ceil(tw * Math.cos(rad) + th * Math.sin(rad)) + 8 * S;
+            var bh = Math.ceil(tw * Math.sin(rad) + th * Math.cos(rad)) + 8 * S;
+            cv.width = Math.max(2, bw); cv.height = Math.max(2, bh);
+            ctx = cv.getContext('2d');
+            ctx.font = fontSpec;
+            ctx.fillStyle = hex || '#000000';
+            ctx.globalAlpha = (alpha == null ? 1 : alpha);
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.translate(cv.width / 2, cv.height / 2);
+            ctx.rotate((rotateDeg || 0) * Math.PI / 180);
+            for (var j = 0; j < lines.length; j++) {
+                ctx.fillText(lines[j], 0, (j - (lines.length - 1) / 2) * size * S * 1.22);
+            }
+            return { dataUrl: cv.toDataURL('image/png'), w: cv.width / S, h: cv.height / S };
+        } catch (e) { return null; }
+    }
+    // pdf-lib's standard fonts use WinAnsi encoding: ASCII + Latin-1 + a small
+    // set of punctuation. Anything else (₹, Devanagari, emoji…) must go through
+    // the rendered-image path instead of native text.
+    function qmWinAnsiSafe(s) {
+        var extra = { 0x20AC: 1, 0x2018: 1, 0x2019: 1, 0x201C: 1, 0x201D: 1, 0x2013: 1, 0x2014: 1, 0x2026: 1, 0x2022: 1, 0x2020: 1, 0x2021: 1, 0x2030: 1, 0x2039: 1, 0x203A: 1, 0x2044: 1, 0x20B9: 0 };
+        for (var i = 0; i < s.length; i++) {
+            var c = s.charCodeAt(i);
+            if (c === 0x0A) continue;
+            if (c >= 0x20 && c <= 0x7E) continue;
+            if (c >= 0xA0 && c <= 0xFF) continue;
+            if (extra[c]) continue;
+            return false;
+        }
+        return true;
+    }
+
+    async function qmEditorRenderPage(pdfB64, pageNum, scale, extraRotation) {
+        var task = pdfjsLib.getDocument({ data: qmB64ToBytes(pdfB64) });
+        var pdf = await task.promise;
+        var pg = await pdf.getPage(pageNum);
+        var total = (((pg.rotate || 0) + (extraRotation || 0)) % 360 + 360) % 360;
+        var vp = pg.getViewport({ scale: scale, rotation: total });
+        var cv = document.createElement('canvas');
+        cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+        await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+        return { pages: pdf.numPages, image: cv.toDataURL('image/png'), pw: vp.width / scale, ph: vp.height / scale };
+    }
+
+    async function qmEditorExport(args) {
+        var src = await PDFLib.PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+        var out = await PDFLib.PDFDocument.create();
+        var font = await out.embedFont(PDFLib.StandardFonts.Helvetica);
+        var fontB = await out.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        for (var pi = 0; pi < args.pages.length; pi++) {
+            var spec = args.pages[pi];
+            var page;
+            if (spec.src < 0) page = out.addPage([595.28, 841.89]);
+            else { var cp = await out.copyPages(src, [spec.src]); page = cp[0]; out.addPage(page); }
+            var inherent = spec.src < 0 ? 0 : (page.getRotation().angle || 0);
+            var R = (((inherent + (spec.rot || 0)) % 360) + 360) % 360;
+            if (spec.src >= 0) page.setRotation(PDFLib.degrees(R));
+            var box = page.getCropBox ? page.getCropBox() : page.getMediaBox();
+            var W = box.width, H = box.height, OX = box.x || 0, OY = box.y || 0;
+            var dispW = (R === 90 || R === 270) ? H : W;
+            var dispH = (R === 90 || R === 270) ? W : H;
+            function PX(dx, dy) { var p = qmPt(dx, dy, W, H, R); return [p[0] + OX, p[1] + OY]; }
+            function RX(x, y, w, h) { var r = qmRect(x, y, w, h, W, H, R); r.x += OX; r.y += OY; return r; }
+            function placed(img, o) {
+                var op = (o.opacity == null ? 1 : o.opacity);
+                if (R === 90) page.drawImage(img, { x: OX + o.y + o.h, y: OY + o.x, width: o.w, height: o.h, rotate: PDFLib.degrees(90), opacity: op });
+                else if (R === 180) page.drawImage(img, { x: OX + W - o.x, y: OY + o.y + o.h, width: o.w, height: o.h, rotate: PDFLib.degrees(180), opacity: op });
+                else if (R === 270) page.drawImage(img, { x: OX + W - o.y - o.h, y: OY + H - o.x, width: o.w, height: o.h, rotate: PDFLib.degrees(270), opacity: op });
+                else { var r = RX(o.x, o.y, o.w, o.h); page.drawImage(img, { x: r.x, y: r.y, width: o.w, height: o.h, opacity: op }); }
+            }
+            // Watermark first (under the user's objects).
+            if (args.watermark && args.watermark.text) {
+                var wm = qmTextPng(args.watermark.text, 54, args.watermark.color || '#7C3AED', true, -30,
+                    args.watermark.opacity == null ? 0.16 : args.watermark.opacity);
+                if (wm) {
+                    var wimg = await out.embedPng(wm.dataUrl);
+                    var ww = dispW * 0.94, wh = ww * (wm.h / wm.w);
+                    if (wh > dispH * 0.8) { wh = dispH * 0.8; ww = wh * (wm.w / wm.h); }
+                    placed(wimg, { x: (dispW - ww) / 2, y: (dispH - wh) / 2, w: ww, h: wh, opacity: 1 });
+                }
+            }
+            var objs = spec.objects || [];
+            for (var oi = 0; oi < objs.length; oi++) {
+                var o = objs[oi];
+                var col = qmHexRgb(o.color);
+                var op = o.opacity == null ? 1 : o.opacity;
+                if (o.t === 'rect' || o.t === 'highlight' || o.t === 'redact') {
+                    var rr = RX(o.x, o.y, o.w, o.h);
+                    var opts = { x: rr.x, y: rr.y, width: rr.w, height: rr.h, opacity: op };
+                    if (o.t === 'redact') { opts.color = PDFLib.rgb(0, 0, 0); opts.opacity = 1; }
+                    else if (o.t === 'highlight') { opts.color = col; }
+                    else if (o.fill) opts.color = col;
+                    else { opts.borderColor = col; opts.borderWidth = o.border || 1.5; }
+                    page.drawRectangle(opts);
+                } else if (o.t === 'ellipse') {
+                    var c = PX(o.x + o.w / 2, o.y + o.h / 2);
+                    var eo = { x: c[0], y: c[1], xScale: ((R === 90 || R === 270) ? o.h : o.w) / 2, yScale: ((R === 90 || R === 270) ? o.w : o.h) / 2, opacity: op };
+                    if (o.fill) eo.color = col; else { eo.borderColor = col; eo.borderWidth = o.border || 1.5; }
+                    page.drawEllipse(eo);
+                } else if (o.t === 'line') {
+                    var la = PX(o.x, o.y), lb = PX(o.x + o.w, o.y + o.h);
+                    page.drawLine({ start: { x: la[0], y: la[1] }, end: { x: lb[0], y: lb[1] }, thickness: o.border || 1.5, color: col, opacity: op });
+                } else if (o.t === 'path') {
+                    var pts = o.points || [];
+                    for (var si = 0; si + 1 < pts.length; si++) {
+                        var p1 = PX(o.x + pts[si][0] * o.w, o.y + pts[si][1] * o.h);
+                        var p2 = PX(o.x + pts[si + 1][0] * o.w, o.y + pts[si + 1][1] * o.h);
+                        page.drawLine({ start: { x: p1[0], y: p1[1] }, end: { x: p2[0], y: p2[1] }, thickness: o.border || 2, color: col, opacity: op });
+                    }
+                } else if (o.t === 'image') {
+                    var im = ('' + o.dataUrl).indexOf('image/png') >= 0 ? await out.embedPng(o.dataUrl) : await out.embedJpg(o.dataUrl);
+                    placed(im, o);
+                } else if (o.t === 'text') {
+                    var txt = '' + (o.text || '');
+                    if (R === 0 && qmWinAnsiSafe(txt)) {
+                        var fnt = o.bold ? fontB : font;
+                        var lines = txt.split('\n');
+                        for (var li = 0; li < lines.length; li++) {
+                            var base = H - (o.y + o.size * 0.82) - li * o.size * 1.22;
+                            page.drawText(lines[li], { x: OX + o.x, y: OY + base, size: o.size, font: fnt, color: col, opacity: op });
+                        }
+                    } else {
+                        var tp = qmTextPng(txt, o.size, o.color, o.bold, 0, op);
+                        if (tp) { var timg = await out.embedPng(tp.dataUrl); placed(timg, { x: o.x, y: o.y, w: tp.w, h: tp.h, opacity: 1 }); }
+                    }
+                }
+            }
+            if (spec.crop) { var cr = RX(spec.crop.x, spec.crop.y, spec.crop.w, spec.crop.h); page.setCropBox(cr.x, cr.y, cr.w, cr.h); }
+        }
+        var bytes = await out.save();
+        return { b64: qmBytesToB64(bytes), pages: out.getPageCount(), size: bytes.length };
+    }
+
+    window.__qmEditorExport = function (argsJson) {
+        var key = 'editor';
+        window.__qmAsync[key] = '';
+        (async function () {
+            try {
+                if (typeof PDFLib === 'undefined') throw new Error('PDF library is still loading. Try again in a moment.');
+                var res = await qmEditorExport(JSON.parse(argsJson || '{}'));
+                qmSetAsync(key, { ok: true, b64: res.b64, pages: res.pages });
+            } catch (e) {
+                var msg = (e && e.message) ? e.message : ('' + e);
+                if (/encrypt|password/i.test(msg)) msg = 'This PDF is password-protected and cannot be edited.';
+                qmSetAsync(key, { ok: false, error: msg });
+            }
+        })();
+    };
+    window.__qmStoreGet = function (k) { try { return localStorage.getItem('qm_' + k) || ''; } catch (e) { return ''; } };
+    window.__qmStoreSet = function (k, v) { try { localStorage.setItem('qm_' + k, '' + v); } catch (e) {} };
 
     // ── Background removal (lazy, model downloads on first use) ──────────
     window.__qmBgProgress = '';

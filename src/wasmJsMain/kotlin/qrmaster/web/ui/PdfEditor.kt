@@ -1,0 +1,1248 @@
+package qrmaster.web.ui
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import qrmaster.web.data.nowMillis
+import kotlin.JsFun
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+// ── PDF Editor (Smallpdf-style) ────────────────────────────────────────────
+// pdf.js renders page previews; the overlay objects live in Compose in
+// DISPLAYED page points (origin top-left). On Download, the shell rebuilds
+// the document with pdf-lib in the editor's page order and burns every
+// object onto the real pages (see __qmEditorExport in index.html).
+// Honest limits (also shown in the UI): text already inside the PDF cannot
+// be edited in place — cover it (white rectangle) and add new text;
+// redaction draws an opaque cover box, it is not certified content removal.
+
+@JsFun("(argsJson) => { window.__qmEditorExport(argsJson); }")
+external fun editorExportStart(argsJson: String)
+
+@JsFun("(k) => { return window.__qmStoreGet ? window.__qmStoreGet(k) : ''; }")
+external fun storeGet(k: String): String
+
+@JsFun("(k, v) => { if (window.__qmStoreSet) window.__qmStoreSet(k, v); }")
+external fun storeSet(k: String, v: String)
+
+data class EdObj(
+    val id: Int,
+    val type: String, // text | image | rect | ellipse | highlight | redact | path
+    val x: Float, val y: Float, val w: Float, val h: Float,
+    val text: String = "",
+    val fontSize: Float = 16f,
+    val color: Long = 0xFF111827,
+    val bold: Boolean = false,
+    val opacity: Float = 1f,
+    val dataUrl: String? = null,
+    val points: List<Pair<Float, Float>> = emptyList(), // relative 0..1 in box; (-1,-1) = pen up
+    val strokeWidth: Float = 2f,
+    val fill: Boolean = false
+)
+
+data class EdPageState(
+    val srcIndex: Int, // -1 = blank page
+    val extraRotation: Int = 0,
+    val crop: List<Float>? = null, // x, y, w, h in displayed points
+    val objects: List<EdObj> = emptyList()
+)
+
+private enum class EdTool { Select, Text, Draw, Highlight, Rect, Ellipse, Line, Redact, Crop }
+private enum class EdTab { Edit, Sign, Organize }
+
+private val ED_COLORS = listOf(
+    0xFF111827L, 0xFFFFFFFFL, 0xFFDC2626L, 0xFF2563EBL, 0xFF059669L,
+    0xFFF59E0BL, 0xFF7C3AEDL, 0xFFFDE047L, 0xFFDB2777L, 0xFF64748BL
+)
+
+private fun edHex(argb: Long): String =
+    "#" + (argb and 0xFFFFFF).toString(16).uppercase().padStart(6, '0')
+
+private fun edTextBox(text: String, size: Float): Pair<Float, Float> {
+    val lines = text.split("\n")
+    val w = (lines.maxOfOrNull { it.length } ?: 0) * size * 0.56f + 10f
+    val h = lines.size * size * 1.25f + 6f
+    return max(30f, w) to max(18f, h)
+}
+
+private suspend fun ensureEditorLibs(): String? {
+    loadPdfLibs()
+    var tries = 0
+    var status = pdfLibStatus()
+    while (status != "ready" && tries < 120) {
+        if (status.startsWith("error")) return status.removePrefix("error:")
+        delay(300); tries++; status = pdfLibStatus()
+    }
+    return if (status == "ready") null else "The PDF engine is still loading. Try again in a moment."
+}
+
+@Composable
+fun PdfEditorScreen(state: AppState) {
+    val scope = rememberCoroutineScope()
+    var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
+    var pdfB64 by remember { mutableStateOf<String?>(null) }
+    var fileName by remember { mutableStateOf("") }
+    var pages by remember { mutableStateOf<List<EdPageState>>(emptyList()) }
+    var current by remember { mutableStateOf(0) }
+    var tool by remember { mutableStateOf(EdTool.Select) }
+    var tab by remember { mutableStateOf(EdTab.Edit) }
+    var selectedId by remember { mutableStateOf<Int?>(null) }
+    var nextId by remember { mutableStateOf(1) }
+    var zoom by remember { mutableStateOf(1f) }
+    var busy by remember { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf<String?>(null) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var previews by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> dataUrl (1.6x)
+    var thumbs by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    var dims by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(emptyMap()) } // outPage -> displayed pts
+    var undoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
+    var redoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
+    var wmText by remember { mutableStateOf("") }
+    var wmOpacity by remember { mutableStateOf(0.16f) }
+    var wmPanel by remember { mutableStateOf(false) }
+    var draftRect by remember { mutableStateOf<List<Float>?>(null) } // x,y,w,h displayed pts
+    var draftPoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
+    var sigStrokes by remember { mutableStateOf<List<List<Pair<Float, Float>>>>(emptyList()) }
+    var savedSigs by remember { mutableStateOf<List<List<List<Pair<Float, Float>>>>>(emptyList()) }
+    val focusRequester = remember { FocusRequester() }
+
+    val page = pages.getOrNull(current)
+    val pageDims = dims[current] ?: (595.28f to 841.89f)
+    val selected = page?.objects?.firstOrNull { it.id == selectedId }
+
+    fun snapshot() {
+        undoStack = (undoStack + listOf(pages)).takeLast(60)
+        redoStack = emptyList()
+    }
+    fun replacePage(idx: Int, p: EdPageState) {
+        pages = pages.toMutableList().also { it[idx] = p }
+    }
+    fun mutateSelected(transform: (EdObj) -> EdObj) {
+        val p = pages.getOrNull(current) ?: return; val id = selectedId ?: return
+        replacePage(current, p.copy(objects = p.objects.map { if (it.id == id) transform(it) else it }))
+    }
+    fun deleteSelected() {
+        val p = pages.getOrNull(current) ?: return; val id = selectedId ?: return
+        snapshot()
+        replacePage(current, p.copy(objects = p.objects.filter { it.id != id }))
+        selectedId = null
+    }
+    fun undo() {
+        if (undoStack.isEmpty()) return
+        redoStack = redoStack + listOf(pages)
+        pages = undoStack.last(); undoStack = undoStack.dropLast(1)
+        selectedId = null
+        if (current >= pages.size) current = max(0, pages.size - 1)
+    }
+    fun redo() {
+        if (redoStack.isEmpty()) return
+        undoStack = undoStack + listOf(pages)
+        pages = redoStack.last(); redoStack = redoStack.dropLast(1)
+        selectedId = null
+        if (current >= pages.size) current = max(0, pages.size - 1)
+    }
+
+    suspend fun renderOutPage(idx: Int, forThumb: Boolean) {
+        val p = pages.getOrNull(idx) ?: return
+        val b64 = pdfB64 ?: return
+        if (p.srcIndex < 0) {
+            dims = dims + (idx to (595.28f to 841.89f))
+            return
+        }
+        val scale = if (forThumb) 0.35 else 1.6
+        pdfOp("renderPage", buildJsonObject {
+            put("pdf", b64); put("page", p.srcIndex + 1); put("scale", scale); put("rotation", p.extraRotation)
+        }.toString())
+        val res = awaitAsync("pdf", 120_000) ?: return
+        if (!res.asyncOk()) return
+        val img = res.asyncStr("image")
+        val pw = res.asyncStr("pw").toFloatOrNull() ?: return
+        val ph = res.asyncStr("ph").toFloatOrNull() ?: return
+        if (forThumb) thumbs = thumbs + (idx to img)
+        else { previews = previews + (idx to img); dims = dims + (idx to (pw to ph)) }
+    }
+
+    fun renderCurrent() { scope.launch { renderOutPage(current, false) } }
+    fun renderThumb(idx: Int) { scope.launch { renderOutPage(idx, true) } }
+
+    // Load a newly picked PDF.
+    LaunchedEffect(files.firstOrNull()?.id) {
+        val f = files.firstOrNull() ?: return@LaunchedEffect
+        busy = true; errorText = null; statusText = "Opening ${f.name}…"
+        val libErr = ensureEditorLibs()
+        if (libErr != null) { busy = false; errorText = libErr; return@LaunchedEffect }
+        val b64 = loadFileBase64(f.id)
+        if (b64 == null) { busy = false; errorText = "Could not read this file."; return@LaunchedEffect }
+        pdfOp("count", buildJsonObject { put("pdf", b64) }.toString())
+        val res = awaitAsync("pdf", 60_000)
+        busy = false
+        if (res == null || !res.asyncOk()) {
+            errorText = res?.asyncError() ?: "Could not open this PDF. It may be corrupt or password-protected."
+            return@LaunchedEffect
+        }
+        val count = res.asyncStr("pages").toIntOrNull() ?: 0
+        if (count <= 0) { errorText = "This PDF has no pages."; return@LaunchedEffect }
+        pdfB64 = b64; fileName = f.name
+        val capped = min(count, 50)
+        pages = (0 until capped).map { EdPageState(srcIndex = it) }
+        current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
+        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap()
+        statusText = if (count > 50) "Opened the first 50 of $count pages (editor limit)." else "Opened $count pages."
+        renderCurrent()
+        for (i in 0 until capped) renderThumb(i)
+    }
+
+    // Saved signatures from local storage.
+    LaunchedEffect(Unit) {
+        try {
+            val raw = storeGet("signatures")
+            if (raw.isNotBlank()) {
+                val arr = kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonArray
+                savedSigs = arr.map { sig ->
+                    sig.jsonArray.map { stroke ->
+                        stroke.jsonArray.map { pt ->
+                            val a = pt.jsonArray
+                            (a[0].jsonPrimitive.content.toFloat()) to (a[1].jsonPrimitive.content.toFloat())
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { /* no saved signatures yet */ }
+    }
+
+    fun persistSigs() {
+        val arr = buildJsonArray {
+            savedSigs.forEach { sig ->
+                add(buildJsonArray {
+                    sig.forEach { stroke ->
+                        add(buildJsonArray {
+                            stroke.forEach { pt -> add(buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(pt.first)); add(kotlinx.serialization.json.JsonPrimitive(pt.second)) }) }
+                        })
+                    }
+                })
+            }
+        }
+        storeSet("signatures", arr.toString())
+    }
+
+    fun addObject(obj: EdObj) {
+        val p = pages.getOrNull(current) ?: return
+        snapshot()
+        replacePage(current, p.copy(objects = p.objects + obj))
+        selectedId = obj.id
+        tool = EdTool.Select
+    }
+
+    fun rotateCurrentPage(delta: Int) {
+        val p = pages.getOrNull(current) ?: return
+        snapshot()
+        replacePage(current, p.copy(extraRotation = ((p.extraRotation + delta) % 360 + 360) % 360))
+        previews = previews - current
+        renderCurrent(); renderThumb(current)
+    }
+
+    fun download() {
+        val b64 = pdfB64 ?: return
+        busy = true; errorText = null; statusText = "Building your edited PDF…"
+        scope.launch {
+            val args = buildJsonObject {
+                put("pdf", b64)
+                if (wmText.isNotBlank()) put("watermark", buildJsonObject {
+                    put("text", wmText); put("opacity", wmOpacity.toDouble()); put("color", "#7C3AED")
+                })
+                put("pages", buildJsonArray {
+                    pages.forEach { p ->
+                        add(buildJsonObject {
+                            put("src", p.srcIndex); put("rot", p.extraRotation)
+                            p.crop?.let { c -> put("crop", buildJsonObject {
+                                put("x", c[0].toDouble()); put("y", c[1].toDouble()); put("w", c[2].toDouble()); put("h", c[3].toDouble())
+                            }) }
+                            put("objects", buildJsonArray {
+                                p.objects.forEach { o ->
+                                    add(buildJsonObject {
+                                        put("t", o.type); put("x", o.x.toDouble()); put("y", o.y.toDouble())
+                                        put("w", o.w.toDouble()); put("h", o.h.toDouble())
+                                        put("color", edHex(o.color)); put("opacity", o.opacity.toDouble())
+                                        put("border", o.strokeWidth.toDouble()); put("fill", o.fill)
+                                        if (o.type == "text") { put("text", o.text); put("size", o.fontSize.toDouble()); put("bold", o.bold) }
+                                        if (o.type == "image" && o.dataUrl != null) put("dataUrl", o.dataUrl)
+                                        if (o.type == "path") put("points", buildJsonArray {
+                                            o.points.forEach { pt -> add(buildJsonArray {
+                                                add(kotlinx.serialization.json.JsonPrimitive(pt.first)); add(kotlinx.serialization.json.JsonPrimitive(pt.second))
+                                            }) }
+                                        })
+                                    })
+                                }
+                            })
+                        })
+                    }
+                })
+            }
+            editorExportStart(args.toString())
+            val res = awaitAsync("editor", 300_000)
+            busy = false
+            if (res == null) { errorText = "Export timed out. Try a smaller PDF."; return@launch }
+            if (!res.asyncOk()) { errorText = res.asyncError(); return@launch }
+            val outB64 = res.asyncStr("b64")
+            val outName = fileName.substringBeforeLast(".").ifBlank { "document" } + "-edited.pdf"
+            downloadFileBase64(outName, outB64, "application/pdf")
+            recordHistory("PDF Editor", outName, "Edited PDF · ${pages.size} pages")
+            statusText = "Downloaded $outName — open it to check your edits are in the file."
+        }
+    }
+
+    // ── actions used by the toolbar / panels ──────────────────────────────
+    fun addImageFlow() {
+        launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
+            if (err != null) { errorText = err; return@launchPick }
+            val f = incoming.firstOrNull() ?: return@launchPick
+            scope.launch {
+                var dataUrl = loadFileDataUrl(f) ?: run { errorText = "Could not read this image."; return@launch }
+                var iw = 0; var ih = 0
+                imgOp("info", buildJsonObject { put("dataUrl", dataUrl) }.toString())
+                val info = awaitAsync("img", 60_000)
+                if (info != null && info.asyncOk()) {
+                    iw = info.asyncStr("w").toIntOrNull() ?: 0; ih = info.asyncStr("h").toIntOrNull() ?: 0
+                }
+                if (f.type.contains("webp") || f.name.lowercase().endsWith(".webp")) {
+                    imgOp("convert", buildJsonObject { put("dataUrl", dataUrl); put("mime", "image/png"); put("quality", 1.0) }.toString())
+                    val conv = awaitAsync("img", 60_000)
+                    if (conv != null && conv.asyncOk()) dataUrl = conv.asyncStr("dataUrl")
+                }
+                val maxW = pageDims.first * 0.55f
+                val w = if (iw > 0) min(iw.toFloat(), maxW) else min(220f, maxW)
+                val h = if (iw > 0 && ih > 0) w * ih / iw else w * 0.75f
+                addObject(EdObj(nextId++, "image",
+                    x = (pageDims.first - w) / 2f, y = (pageDims.second - h) / 2f,
+                    w = w, h = h, dataUrl = dataUrl))
+            }
+        }
+    }
+
+    fun addTextAt(x: Float, y: Float, initial: String = "Type here") {
+        val (tw, th) = edTextBox(initial, 18f)
+        addObject(EdObj(nextId++, "text", x = x, y = y, w = tw, h = th, text = initial, fontSize = 18f))
+    }
+
+    fun placeSignature(sig: List<List<Pair<Float, Float>>>) {
+        val flat = ArrayList<Pair<Float, Float>>()
+        sig.forEachIndexed { i, stroke ->
+            if (i > 0) flat.add(-1f to -1f)
+            flat.addAll(stroke)
+        }
+        if (flat.isEmpty()) return
+        addObject(EdObj(nextId++, "path",
+            x = pageDims.first * 0.55f, y = pageDims.second * 0.62f, w = 210f, h = 74f,
+            color = 0xFF1E3A8A, points = flat, strokeWidth = 2.4f))
+        statusText = "Signature placed — drag it onto the signature line, resize with the corners."
+    }
+
+    val propsPanel: @Composable () -> Unit = {
+        LazyColumn(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Text("Properties", fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = NavyText)
+            }
+            val sel = selected
+            if (sel == null) {
+                item {
+                    Text("Select an object on the page to edit it here — or use the tools above to add text, images, shapes and signatures.",
+                        fontSize = 12.5.sp, color = MutedText)
+                }
+            } else {
+                if (sel.type == "text") {
+                    item {
+                        OutlinedTextField(
+                            value = sel.text,
+                            onValueChange = { v ->
+                                val (tw, th) = edTextBox(v, sel.fontSize)
+                                mutateSelected { it.copy(text = v, w = tw, h = th) }
+                            },
+                            label = { Text("Text") }, shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
+                        Text("Font size: ${sel.fontSize.toInt()} pt", fontSize = 12.sp, color = MutedText)
+                        Slider(value = sel.fontSize, onValueChange = { v ->
+                            val (tw, th) = edTextBox(sel.text, v)
+                            mutateSelected { it.copy(fontSize = v, w = tw, h = th) }
+                        }, valueRange = 8f..72f)
+                    }
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = sel.bold, onClick = { mutateSelected { it.copy(bold = !it.bold) } },
+                                label = { Text("Bold", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White))
+                        }
+                    }
+                }
+                if (sel.type == "image" || sel.type == "rect" || sel.type == "ellipse" ||
+                    sel.type == "highlight" || sel.type == "redact" || sel.type == "path") {
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            EdNumField("X", sel.x) { v -> mutateSelected { it.copy(x = v) } }
+                            EdNumField("Y", sel.y) { v -> mutateSelected { it.copy(y = v) } }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            EdNumField("Width", sel.w) { v -> mutateSelected { it.copy(w = max(8f, v)) } }
+                            EdNumField("Height", sel.h) { v -> mutateSelected { it.copy(h = max(8f, v)) } }
+                        }
+                    }
+                    item {
+                        Text("Opacity: ${(sel.opacity * 100).toInt()}%", fontSize = 12.sp, color = MutedText)
+                        Slider(value = sel.opacity, onValueChange = { v -> mutateSelected { it.copy(opacity = v) } },
+                            valueRange = 0.05f..1f)
+                    }
+                    if (sel.type == "image") {
+                        item {
+                            OutlinedButton(onClick = {
+                                launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
+                                    if (err != null) { errorText = err; return@launchPick }
+                                    val f = incoming.firstOrNull() ?: return@launchPick
+                                    scope.launch {
+                                        var dataUrl = loadFileDataUrl(f) ?: return@launch
+                                        if (f.type.contains("webp") || f.name.lowercase().endsWith(".webp")) {
+                                            imgOp("convert", buildJsonObject { put("dataUrl", dataUrl); put("mime", "image/png"); put("quality", 1.0) }.toString())
+                                            val conv = awaitAsync("img", 60_000)
+                                            if (conv != null && conv.asyncOk()) dataUrl = conv.asyncStr("dataUrl")
+                                        }
+                                        snapshot()
+                                        mutateSelected { it.copy(dataUrl = dataUrl) }
+                                    }
+                                }
+                            }, modifier = Modifier.fillMaxWidth()) { Text("Replace Image", fontSize = 13.sp) }
+                        }
+                    }
+                    if (sel.type == "rect" || sel.type == "ellipse") {
+                        item {
+                            FilterChip(selected = sel.fill, onClick = { mutateSelected { it.copy(fill = !it.fill) } },
+                                label = { Text("Filled shape", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White))
+                        }
+                    }
+                    if (sel.type == "path") {
+                        item {
+                            Text("Pen width: ${sel.strokeWidth.toInt()} pt", fontSize = 12.sp, color = MutedText)
+                            Slider(value = sel.strokeWidth, onValueChange = { v -> mutateSelected { it.copy(strokeWidth = v) } },
+                                valueRange = 1f..8f)
+                        }
+                    }
+                }
+                if (sel.type != "redact") {
+                    item {
+                        Text("Colour", fontSize = 12.sp, color = MutedText)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            ED_COLORS.forEach { c ->
+                                Box(Modifier.size(24.dp).clip(RoundedCornerShape(7.dp))
+                                    .background(Color(c))
+                                    .border(if (sel.color == c) 2.dp else 0.5.dp,
+                                        if (sel.color == c) PurplePrimary else Color(0xFFCBD5E1), RoundedCornerShape(7.dp))
+                                    .clickable { mutateSelected { it.copy(color = c) } })
+                            }
+                        }
+                    }
+                }
+                item {
+                    Button(onClick = { deleteSelected() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                        shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Text("Delete Object", fontSize = 13.sp)
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(4.dp))
+                Text("This Page", fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = NavyText)
+                Text("Size: ${pageDims.first.toInt()} × ${pageDims.second.toInt()} pt" +
+                    (if (page != null && page.extraRotation != 0) " · rotated ${page.extraRotation}°" else ""),
+                    fontSize = 12.sp, color = MutedText)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+                    OutlinedButton(onClick = { rotateCurrentPage(-90) }) { Text("Rotate Left", fontSize = 12.sp) }
+                    OutlinedButton(onClick = { rotateCurrentPage(90) }) { Text("Rotate Right", fontSize = 12.sp) }
+                }
+                if (page?.crop != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Crop is set on this page (applied on download).", fontSize = 12.sp, color = MutedText)
+                    TextButton(onClick = { snapshot(); page?.let { replacePage(current, it.copy(crop = null)) } }) {
+                        Text("Clear Crop", fontSize = 12.5.sp)
+                    }
+                }
+                TextButton(onClick = {
+                    if (pages.size > 1) {
+                        snapshot()
+                        pages = pages.filterIndexed { i, _ -> i != current }
+                        if (current >= pages.size) current = pages.size - 1
+                        selectedId = null
+                        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap()
+                        renderCurrent()
+                        pages.indices.forEach { renderThumb(it) }
+                    }
+                }) { Text("Delete This Page", fontSize = 12.5.sp, color = Color(0xFFDC2626)) }
+            }
+            item {
+                Spacer(Modifier.height(4.dp))
+                Text("Watermark", fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = NavyText)
+                OutlinedTextField(value = wmText, onValueChange = { wmText = it },
+                    label = { Text("Watermark text (all pages)") }, singleLine = true,
+                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth())
+                if (wmText.isNotBlank()) {
+                    Text("Opacity: ${(wmOpacity * 100).toInt()}%", fontSize = 12.sp, color = MutedText)
+                    Slider(value = wmOpacity, onValueChange = { wmOpacity = it }, valueRange = 0.05f..0.5f)
+                }
+            }
+            item {
+                Text("Note: text already inside the PDF can't be edited in place — cover it with a white rectangle (Shape → filled, white) and add new text on top. Redaction covers content with an opaque box.",
+                    fontSize = 11.5.sp, color = MutedText)
+            }
+        }
+    }
+
+    // The page canvas: preview image + overlay objects + one unified pointer
+    // handler (hit-testing done manually, so child gestures never conflict).
+    // All state reads inside the handler go through the state delegates, so
+    // they stay live for the whole drag.
+    val pageCanvas: @Composable () -> Unit = {
+        val d = dims[current] ?: (595.28f to 841.89f)
+        val pg = pages.getOrNull(current)
+        val previewBmp = remember(previews[current]) { previews[current]?.let { decodeBitmapFromDataUrl(it) } }
+        Box(
+            Modifier.size((d.first * zoom).dp, (d.second * zoom).dp)
+                .background(Color.White)
+                .border(1.dp, Color(0xFFCBD5E1))
+                .pointerInput(tool, current) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val down = awaitPointerEvent(PointerEventType.Press)
+                            val change = down.changes.firstOrNull() ?: continue
+                            focusRequester.requestFocus()
+                            val liveDims = dims[current] ?: (595.28f to 841.89f)
+                            val pw = size.width.toFloat(); val ph = size.height.toFloat()
+                            fun toPt(o: Offset) = ((o.x / pw) * liveDims.first) to ((o.y / ph) * liveDims.second)
+                            val (sx, sy) = toPt(change.position)
+                            val livePage = pages.getOrNull(current)
+                            var mode = "none"
+                            var dragId: Int? = null
+                            var handle = -1
+                            var grabDx = 0f; var grabDy = 0f
+                            var didSnapshot = false
+                            val liveSel = livePage?.objects?.firstOrNull { it.id == selectedId }
+                            if (tool == EdTool.Select && liveSel != null && liveSel.type != "text") {
+                                edHandles(liveSel).forEachIndexed { i, hp ->
+                                    if (abs(sx - hp.first) <= 11f && abs(sy - hp.second) <= 11f) handle = i
+                                }
+                            }
+                            if (handle >= 0 && liveSel != null) { mode = "resize"; dragId = liveSel.id }
+                            else when (tool) {
+                                EdTool.Select -> {
+                                    val hit = livePage?.objects?.lastOrNull {
+                                        sx >= it.x && sx <= it.x + it.w && sy >= it.y && sy <= it.y + it.h
+                                    }
+                                    if (hit != null) {
+                                        selectedId = hit.id; mode = "move"; dragId = hit.id
+                                        grabDx = sx - hit.x; grabDy = sy - hit.y
+                                    } else selectedId = null
+                                }
+                                EdTool.Text -> mode = "text"
+                                EdTool.Draw -> { mode = "draw"; draftPoints = listOf(sx to sy) }
+                                EdTool.Highlight, EdTool.Rect, EdTool.Ellipse, EdTool.Line, EdTool.Redact, EdTool.Crop -> {
+                                    mode = "rect"; draftRect = listOf(sx, sy, 0f, 0f)
+                                }
+                            }
+                            var lastX = sx; var lastY = sy
+                            var released = false
+                            while (!released) {
+                                val ev = awaitPointerEvent()
+                                val ch = ev.changes.firstOrNull() ?: break
+                                val (cx, cy) = toPt(ch.position)
+                                when (ev.type) {
+                                    PointerEventType.Move -> {
+                                        if (!didSnapshot && (mode == "move" || mode == "resize") &&
+                                            (abs(cx - sx) > 1f || abs(cy - sy) > 1f)) { snapshot(); didSnapshot = true }
+                                        when (mode) {
+                                            "move" -> {
+                                                val id = dragId; val p = pages.getOrNull(current)
+                                                if (id != null && p != null) replacePage(current, p.copy(objects = p.objects.map {
+                                                    if (it.id == id) it.copy(
+                                                        x = (cx - grabDx).coerceIn(-it.w / 2, liveDims.first - 16f),
+                                                        y = (cy - grabDy).coerceIn(0f, liveDims.second - 12f)
+                                                    ) else it
+                                                }))
+                                            }
+                                            "resize" -> {
+                                                val id = dragId; val p = pages.getOrNull(current)
+                                                if (id != null && p != null) replacePage(current, p.copy(objects = p.objects.map {
+                                                    if (it.id == id) edResize(it, handle, cx - lastX, cy - lastY) else it
+                                                }))
+                                            }
+                                            "draw" -> {
+                                                val last = draftPoints.lastOrNull()
+                                                if (last == null || abs(cx - last.first) > 2f || abs(cy - last.second) > 2f)
+                                                    draftPoints = draftPoints + (cx to cy)
+                                            }
+                                            "rect" -> draftRect = listOf(min(sx, cx), min(sy, cy), abs(cx - sx), abs(cy - sy))
+                                        }
+                                        lastX = cx; lastY = cy
+                                    }
+                                    PointerEventType.Release -> {
+                                        released = true
+                                        when (mode) {
+                                            "text" -> if (abs(cx - sx) < 5f && abs(cy - sy) < 5f) addTextAt(sx, sy)
+                                            "draw" -> {
+                                                val pts = draftPoints; draftPoints = emptyList()
+                                                if (pts.size > 1) {
+                                                    val minX = pts.minOf { it.first }; val minY = pts.minOf { it.second }
+                                                    val maxX = pts.maxOf { it.first }; val maxY = pts.maxOf { it.second }
+                                                    val w = max(4f, maxX - minX); val h = max(4f, maxY - minY)
+                                                    addObject(EdObj(nextId++, "path", minX, minY, w, h,
+                                                        color = 0xFF2563EB, strokeWidth = 2.2f,
+                                                        points = pts.map { ((it.first - minX) / w) to ((it.second - minY) / h) }))
+                                                }
+                                            }
+                                            "rect" -> {
+                                                val dr = draftRect; draftRect = null
+                                                if (dr != null && dr[2] > 6f && dr[3] > 6f) {
+                                                    when (tool) {
+                                                        EdTool.Highlight -> addObject(EdObj(nextId++, "highlight", dr[0], dr[1], dr[2], dr[3], color = 0xFFFDE047, opacity = 0.35f))
+                                                        EdTool.Redact -> addObject(EdObj(nextId++, "redact", dr[0], dr[1], dr[2], dr[3]))
+                                                        EdTool.Rect -> addObject(EdObj(nextId++, "rect", dr[0], dr[1], dr[2], dr[3], color = 0xFF7C3AED, strokeWidth = 1.5f))
+                                                        EdTool.Ellipse -> addObject(EdObj(nextId++, "ellipse", dr[0], dr[1], dr[2], dr[3], color = 0xFF7C3AED, strokeWidth = 1.5f))
+                                                        EdTool.Line -> addObject(EdObj(nextId++, "path", dr[0], dr[1], dr[2], dr[3], color = 0xFF111827, strokeWidth = 1.5f, points = listOf(0f to 0f, 1f to 1f)))
+                                                        EdTool.Crop -> {
+                                                            val p = pages.getOrNull(current)
+                                                            if (p != null) {
+                                                                snapshot()
+                                                                replacePage(current, p.copy(crop = dr))
+                                                                statusText = "Crop set on this page — it applies when you download."
+                                                            }
+                                                        }
+                                                        else -> {}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else -> {}
+                                }
+                            }
+                        }
+                    }
+                }
+        ) {
+            if (pg != null && pg.srcIndex < 0) {
+                Text("Blank page", color = MutedText, fontSize = 13.sp, modifier = Modifier.align(Alignment.Center))
+            } else if (previewBmp != null) {
+                Image(previewBmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+            } else {
+                CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.align(Alignment.Center).size(22.dp))
+            }
+            // crop mask
+            val crop = pg?.crop
+            if (crop != null) {
+                val mask = Color(0x59000000)
+                Box(Modifier.offset(0.dp, 0.dp).size((crop[0] * zoom).dp, (d.second * zoom).dp).background(mask))
+                Box(Modifier.offset(((crop[0] + crop[2]) * zoom).dp, 0.dp)
+                    .size((((d.first - crop[0] - crop[2]).coerceAtLeast(0f)) * zoom).dp, (d.second * zoom).dp).background(mask))
+                Box(Modifier.offset((crop[0] * zoom).dp, 0.dp).size((crop[2] * zoom).dp, (crop[1] * zoom).dp).background(mask))
+                Box(Modifier.offset((crop[0] * zoom).dp, ((crop[1] + crop[3]) * zoom).dp)
+                    .size((crop[2] * zoom).dp, (((d.second - crop[1] - crop[3]).coerceAtLeast(0f)) * zoom).dp).background(mask))
+                Box(Modifier.offset((crop[0] * zoom).dp, (crop[1] * zoom).dp)
+                    .size((crop[2] * zoom).dp, (crop[3] * zoom).dp)
+                    .border(1.5.dp, PurplePrimary))
+            }
+            // watermark preview
+            if (wmText.isNotBlank()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(wmText, fontSize = (54 * zoom).sp, fontWeight = FontWeight.Bold,
+                        color = PurplePrimary.copy(alpha = wmOpacity),
+                        modifier = Modifier.graphicsLayer(rotationZ = -30f))
+                }
+            }
+            // objects
+            pg?.objects?.forEach { o -> EdObjView(o, zoom, o.id == selectedId) }
+            // draft shape
+            val dr = draftRect
+            if (dr != null && dr[2] > 0f) {
+                Box(Modifier.offset((dr[0] * zoom).dp, (dr[1] * zoom).dp)
+                    .size((dr[2] * zoom).dp, (dr[3] * zoom).dp)
+                    .background(PurplePrimary.copy(alpha = 0.15f))
+                    .border(1.5.dp, PurplePrimary))
+            }
+            // draft freehand
+            if (draftPoints.size > 1) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val col = Color(0xFF2563EB)
+                    for (i in 0 until draftPoints.size - 1) {
+                        drawLine(col,
+                            Offset(draftPoints[i].first / d.first * size.width, draftPoints[i].second / d.second * size.height),
+                            Offset(draftPoints[i + 1].first / d.first * size.width, draftPoints[i + 1].second / d.second * size.height),
+                            strokeWidth = (2.2f * zoom).dp.toPx())
+                    }
+                }
+            }
+        }
+    }
+
+    fun afterStructureChange(newCurrent: Int) {
+        current = newCurrent.coerceIn(0, max(0, pages.size - 1))
+        selectedId = null
+        previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap()
+        renderCurrent()
+        pages.indices.forEach { renderThumb(it) }
+    }
+
+    // ── layout ────────────────────────────────────────────────────────────
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 8.dp)
+            .focusRequester(focusRequester).focusable()
+            .onKeyEvent { ev ->
+                if (ev.type != KeyEventType.KeyDown || pages.isEmpty()) return@onKeyEvent false
+                val sel = selected
+                when {
+                    ev.key == Key.Delete || ev.key == Key.Backspace -> {
+                        if (sel != null) { deleteSelected(); true } else false
+                    }
+                    ev.key == Key.Z && ev.isCtrlPressed -> { undo(); true }
+                    ev.key == Key.Y && ev.isCtrlPressed -> { redo(); true }
+                    sel != null && (ev.key == Key.DirectionLeft || ev.key == Key.DirectionRight ||
+                        ev.key == Key.DirectionUp || ev.key == Key.DirectionDown) -> {
+                        val step = if (ev.isShiftPressed) 10f else 1f
+                        mutateSelected {
+                            it.copy(
+                                x = it.x + when (ev.key) { Key.DirectionLeft -> -step; Key.DirectionRight -> step; else -> 0f },
+                                y = it.y + when (ev.key) { Key.DirectionUp -> -step; Key.DirectionDown -> step; else -> 0f }
+                            )
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(PurplePrimary),
+                contentAlignment = Alignment.Center) {
+                QrIcon(IconKind.Edit, Color.White, size = 22.dp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("PDF Editor", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                Text("All Tools › PDF Tools › PDF Editor — edits are burned into the real PDF on download.",
+                    fontSize = 12.5.sp, color = MutedText)
+            }
+            if (pages.isNotEmpty()) {
+                OutlinedButton(onClick = {
+                    files = emptyList(); pages = emptyList(); pdfB64 = null
+                    previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); selectedId = null
+                }) { Text("Open PDF", fontSize = 13.sp) }
+                Spacer(Modifier.width(10.dp))
+                Button(onClick = { download() }, enabled = !busy,
+                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                    shape = RoundedCornerShape(11.dp)) {
+                    if (busy) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
+                    else Text("Download PDF", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        if (errorText != null) {
+            Text(errorText!!, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+        }
+        if (statusText != null && pages.isNotEmpty()) {
+            Text(statusText!!, color = MutedText, fontSize = 12.5.sp)
+            Spacer(Modifier.height(6.dp))
+        }
+
+        if (pages.isEmpty()) {
+            WhiteCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (busy) Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text(statusText ?: "Opening…", fontSize = 13.sp, color = MutedText)
+                    }
+                    FileZone(state, files, PDF_BIG_SPEC, "PDF only (max 100 MB) — forms, scans and documents") { files = it.take(1) }
+                    Text("Open a PDF to add text, photos and signatures, highlight, redact, crop, rotate and organise pages — then download the finished file. Everything runs in your browser; your file never leaves this device.",
+                        fontSize = 12.5.sp, color = MutedText)
+                }
+            }
+        } else {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+              val wide = maxWidth >= 1150.dp
+              Column(Modifier.fillMaxSize()) {
+                Row(Modifier.weight(1f)) {
+                // ── thumbnails rail ──
+                LazyColumn(
+                    Modifier.width(96.dp).fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    itemsIndexed(pages) { idx, pg ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val thumbBmp = remember(thumbs[idx]) { thumbs[idx]?.let { decodeBitmapFromDataUrl(it) } }
+                            Box(
+                                Modifier.width(68.dp).height(92.dp).clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White)
+                                    .border(if (idx == current) 2.dp else 1.dp,
+                                        if (idx == current) PurplePrimary else Color(0xFFCBD5E1), RoundedCornerShape(8.dp))
+                                    .clickable { current = idx; selectedId = null; if (previews[idx] == null) renderCurrent() },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (thumbBmp != null) Image(thumbBmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                                else if (pg.srcIndex < 0) Text("Blank", fontSize = 10.sp, color = MutedText)
+                                else CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(14.dp))
+                            }
+                            Text("${idx + 1}", fontSize = 11.sp, fontWeight = if (idx == current) FontWeight.Bold else FontWeight.Normal,
+                                color = if (idx == current) PurplePrimary else MutedText)
+                            if (tab == EdTab.Organize) {
+                                Row {
+                                    TextButton(onClick = {
+                                        if (idx > 0) { snapshot(); pages = pages.toMutableList().also { val t = it[idx - 1]; it[idx - 1] = it[idx]; it[idx] = t }; afterStructureChange(idx - 1) }
+                                    }, enabled = idx > 0) { Text("↑", fontSize = 13.sp) }
+                                    TextButton(onClick = {
+                                        if (idx < pages.size - 1) { snapshot(); pages = pages.toMutableList().also { val t = it[idx + 1]; it[idx + 1] = it[idx]; it[idx] = t }; afterStructureChange(idx + 1) }
+                                    }, enabled = idx < pages.size - 1) { Text("↓", fontSize = 13.sp) }
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        OutlinedButton(onClick = {
+                            snapshot()
+                            pages = pages.toMutableList().also { it.add(current + 1, EdPageState(srcIndex = -1)) }
+                            afterStructureChange(current + 1)
+                        }) { Text("+ Add Page", fontSize = 11.5.sp) }
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                // ── centre workspace ──
+                Column(Modifier.weight(1f)) {
+                    // file chip
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        QrIcon(IconKind.Pdf, Color(0xFFDC2626), size = 18.dp)
+                        Spacer(Modifier.width(7.dp))
+                        Text(fileName, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = NavyText, maxLines = 1)
+                        Spacer(Modifier.width(8.dp))
+                        Text("${pages.size} pages", fontSize = 12.sp, color = MutedText)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // tabs
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(EdTab.Edit to "Edit & Annotate", EdTab.Sign to "Fill & Sign", EdTab.Organize to "Organize Pages").forEach { (t, label) ->
+                            FilterChip(selected = tab == t, onClick = { tab = t },
+                                label = { Text(label, fontSize = 12.5.sp) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White))
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // tool rows per tab
+                    when (tab) {
+                        EdTab.Edit -> {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                EdToolBtn("Add Text", tool == EdTool.Text) { tool = EdTool.Text }
+                                EdToolBtn("Draw", tool == EdTool.Draw) { tool = EdTool.Draw }
+                                EdToolBtn("Highlight", tool == EdTool.Highlight) { tool = EdTool.Highlight }
+                                Box {
+                                    var shapeOpen by remember { mutableStateOf(false) }
+                                    EdToolBtn("Shape ▾", tool == EdTool.Rect || tool == EdTool.Ellipse || tool == EdTool.Line) { shapeOpen = true }
+                                    DropdownMenu(expanded = shapeOpen, onDismissRequest = { shapeOpen = false }) {
+                                        DropdownMenuItem(text = { Text("Rectangle") }, onClick = { tool = EdTool.Rect; shapeOpen = false })
+                                        DropdownMenuItem(text = { Text("Ellipse") }, onClick = { tool = EdTool.Ellipse; shapeOpen = false })
+                                        DropdownMenuItem(text = { Text("Line") }, onClick = { tool = EdTool.Line; shapeOpen = false })
+                                    }
+                                }
+                                EdToolBtn("Redact", tool == EdTool.Redact) { tool = EdTool.Redact }
+                                EdToolBtn("Add Image", false) { addImageFlow() }
+                                EdToolBtn("Watermark", wmPanel) { wmPanel = !wmPanel }
+                                EdToolBtn("Crop", tool == EdTool.Crop) { tool = EdTool.Crop }
+                                EdToolBtn("Rotate", false) { rotateCurrentPage(90) }
+                                EdToolBtn("↩ Undo", false, enabled = undoStack.isNotEmpty()) { undo() }
+                                EdToolBtn("↪ Redo", false, enabled = redoStack.isNotEmpty()) { redo() }
+                            }
+                            if (wmPanel) {
+                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    OutlinedTextField(value = wmText, onValueChange = { wmText = it },
+                                        label = { Text("Watermark (all pages)") }, singleLine = true,
+                                        shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f))
+                                    Column(Modifier.width(170.dp)) {
+                                        Text("Opacity ${(wmOpacity * 100).toInt()}%", fontSize = 11.5.sp, color = MutedText)
+                                        Slider(value = wmOpacity, onValueChange = { wmOpacity = it }, valueRange = 0.05f..0.5f)
+                                    }
+                                    TextButton(onClick = { wmPanel = false }) { Text("Done", fontSize = 12.5.sp) }
+                                }
+                            }
+                        }
+                        EdTab.Sign -> {
+                            var curStroke by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(
+                                    Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(10.dp))
+                                        .background(Color.White)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp))
+                                        .pointerInput(Unit) {
+                                            awaitPointerEventScope {
+                                                while (true) {
+                                                    val down = awaitPointerEvent(PointerEventType.Press)
+                                                    val c0 = down.changes.firstOrNull() ?: continue
+                                                    curStroke = listOf((c0.position.x / size.width) to (c0.position.y / size.height))
+                                                    var done = false
+                                                    while (!done) {
+                                                        val ev = awaitPointerEvent()
+                                                        val ch = ev.changes.firstOrNull() ?: break
+                                                        when (ev.type) {
+                                                            PointerEventType.Move -> curStroke = curStroke + ((ch.position.x / size.width) to (ch.position.y / size.height))
+                                                            PointerEventType.Release -> { done = true; if (curStroke.size > 1) sigStrokes = sigStrokes + listOf(curStroke); curStroke = emptyList() }
+                                                            else -> {}
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                ) {
+                                    Canvas(Modifier.fillMaxSize()) {
+                                        val col = Color(0xFF1E3A8A)
+                                        (sigStrokes + if (curStroke.isNotEmpty()) listOf(curStroke) else emptyList()).forEach { stroke ->
+                                            for (i in 0 until stroke.size - 1) {
+                                                drawLine(col,
+                                                    Offset(stroke[i].first * size.width, stroke[i].second * size.height),
+                                                    Offset(stroke[i + 1].first * size.width, stroke[i + 1].second * size.height),
+                                                    strokeWidth = 2.4.dp.toPx())
+                                            }
+                                        }
+                                    }
+                                    if (sigStrokes.isEmpty() && curStroke.isEmpty()) {
+                                        Text("Draw your signature here", color = MutedText, fontSize = 13.sp,
+                                            modifier = Modifier.align(Alignment.Center))
+                                    }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                    EdToolBtn("Clear", false, enabled = sigStrokes.isNotEmpty()) { sigStrokes = emptyList() }
+                                    EdToolBtn("Save Signature", false, enabled = sigStrokes.isNotEmpty()) {
+                                        savedSigs = savedSigs + listOf(sigStrokes); persistSigs()
+                                        state.toast("Signature saved on this device")
+                                    }
+                                    EdToolBtn("Place on Page", false, enabled = sigStrokes.isNotEmpty()) { placeSignature(sigStrokes) }
+                                    EdToolBtn("Add Text", false) { tab = EdTab.Edit; tool = EdTool.Text }
+                                    EdToolBtn("Today's Date", false) {
+                                        val parts = todayIst().split("-")
+                                        val months = listOf("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+                                        val label = if (parts.size == 3) "${parts[2].toIntOrNull() ?: parts[2]} ${months.getOrElse((parts[1].toIntOrNull() ?: 1) - 1) { "" }} ${parts[0]}" else todayIst()
+                                        addTextAt(60f, 60f, label)
+                                    }
+                                }
+                                if (savedSigs.isNotEmpty()) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Saved:", fontSize = 12.sp, color = MutedText)
+                                        savedSigs.forEachIndexed { si, sig ->
+                                            Box(Modifier.width(110.dp).height(44.dp).clip(RoundedCornerShape(8.dp))
+                                                .background(Color.White)
+                                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                                                .clickable { placeSignature(sig) }) {
+                                                Canvas(Modifier.fillMaxSize().padding(4.dp)) {
+                                                    val col = Color(0xFF1E3A8A)
+                                                    sig.forEach { stroke ->
+                                                        for (i in 0 until stroke.size - 1) {
+                                                            drawLine(col,
+                                                                Offset(stroke[i].first * size.width, stroke[i].second * size.height),
+                                                                Offset(stroke[i + 1].first * size.width, stroke[i + 1].second * size.height),
+                                                                strokeWidth = 1.6.dp.toPx())
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            TextButton(onClick = { savedSigs = savedSigs.filterIndexed { i, _ -> i != si }; persistSigs() }) {
+                                                Text("✕", fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        EdTab.Organize -> {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                EdToolBtn("Add Blank Page", false) {
+                                    snapshot()
+                                    pages = pages.toMutableList().also { it.add(current + 1, EdPageState(srcIndex = -1)) }
+                                    afterStructureChange(current + 1)
+                                }
+                                EdToolBtn("Duplicate Page", false) {
+                                    val p = page
+                                    if (p != null) {
+                                        snapshot()
+                                        pages = pages.toMutableList().also { it.add(current + 1, p.copy(objects = p.objects.map { o -> o.copy() })) }
+                                        afterStructureChange(current + 1)
+                                    }
+                                }
+                                EdToolBtn("Move Earlier", false, enabled = current > 0) {
+                                    snapshot()
+                                    pages = pages.toMutableList().also { val t = it[current - 1]; it[current - 1] = it[current]; it[current] = t }
+                                    afterStructureChange(current - 1)
+                                }
+                                EdToolBtn("Move Later", false, enabled = current < pages.size - 1) {
+                                    snapshot()
+                                    pages = pages.toMutableList().also { val t = it[current + 1]; it[current + 1] = it[current]; it[current] = t }
+                                    afterStructureChange(current + 1)
+                                }
+                                EdToolBtn("Delete Page", false, enabled = pages.size > 1) {
+                                    snapshot()
+                                    pages = pages.filterIndexed { i, _ -> i != current }
+                                    afterStructureChange(min(current, pages.size - 1))
+                                }
+                            }
+                            Text("Reorder with the ↑ ↓ buttons under each thumbnail, or select a page and use Move Earlier / Move Later. Page order applies on download.",
+                                fontSize = 12.sp, color = MutedText, modifier = Modifier.padding(top = 6.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // ── page viewport ──
+                    Box(
+                        Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFECECF3))
+                    ) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                Box(Modifier.padding(16.dp)) {
+                                    pageCanvas()
+                                }
+                            }
+                        }
+                        if (busy) CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.align(Alignment.Center))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // ── bottom bar ──
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { if (current > 0) { current--; selectedId = null; if (previews[current] == null) renderCurrent() } },
+                            enabled = current > 0) { Text("‹ Prev", fontSize = 12.5.sp) }
+                        Spacer(Modifier.width(10.dp))
+                        Text("Page ${current + 1} / ${pages.size}", fontSize = 13.sp, color = NavyText, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.width(10.dp))
+                        OutlinedButton(onClick = { if (current < pages.size - 1) { current++; selectedId = null; if (previews[current] == null) renderCurrent() } },
+                            enabled = current < pages.size - 1) { Text("Next ›", fontSize = 12.5.sp) }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { zoom = max(0.4f, zoom - 0.1f) }) { Text("−", fontSize = 16.sp) }
+                        Text("${(zoom * 100).toInt()}%", fontSize = 12.5.sp, color = NavyText)
+                        TextButton(onClick = { zoom = min(2.5f, zoom + 0.1f) }) { Text("+", fontSize = 16.sp) }
+                        TextButton(onClick = { zoom = 1f }) { Text("100%", fontSize = 12.5.sp) }
+                    }
+                }
+                    if (wide) {
+                        Spacer(Modifier.width(12.dp))
+                        WhiteCard(Modifier.width(280.dp).fillMaxHeight()) { propsPanel() }
+                    }
+                }
+                if (!wide) {
+                    Spacer(Modifier.height(10.dp))
+                    WhiteCard(Modifier.fillMaxWidth().height(280.dp)) { propsPanel() }
+                }
+              }
+            }
+        }
+    }
+}
+
+// ── editor helper composables / geometry ───────────────────────────────────
+
+@Composable
+fun EdToolBtn(text: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.height(38.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (selected) PurplePrimary else Color(0xFFF1EFFD))
+            .border(1.dp, if (selected) PurplePrimary else Color(0xFFD9D2F7), RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 13.dp)
+            .alpha(if (enabled) 1f else 0.45f),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+            color = if (selected) Color.White else NavyText, maxLines = 1)
+    }
+}
+
+@Composable
+fun EdNumField(label: String, value: Float, onChange: (Float) -> Unit) {
+    var text by remember(value) { mutableStateOf(value.toInt().toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { t ->
+            text = t
+            t.toFloatOrNull()?.let { onChange(it) }
+        },
+        label = { Text(label, fontSize = 11.sp) },
+        singleLine = true,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.width(84.dp)
+    )
+}
+
+/** Handle anchor points in page points: 4 corners, then T / R / B / L edges. */
+fun edHandles(o: EdObj): List<Pair<Float, Float>> = listOf(
+    o.x to o.y, (o.x + o.w) to o.y, o.x to (o.y + o.h), (o.x + o.w) to (o.y + o.h),
+    (o.x + o.w / 2) to o.y, (o.x + o.w) to (o.y + o.h / 2),
+    (o.x + o.w / 2) to (o.y + o.h), o.x to (o.y + o.h / 2)
+)
+
+fun edResize(o: EdObj, handle: Int, dx: Float, dy: Float): EdObj {
+    var x = o.x; var y = o.y; var w = o.w; var h = o.h
+    when (handle) {
+        0 -> { x += dx; w -= dx; y += dy; h -= dy }
+        1 -> { w += dx; y += dy; h -= dy }
+        2 -> { x += dx; w -= dx; h += dy }
+        3 -> { w += dx; h += dy }
+        4 -> { y += dy; h -= dy }
+        5 -> { w += dx }
+        6 -> { h += dy }
+        7 -> { x += dx; w -= dx }
+    }
+    if (w < 10f) { if (handle == 0 || handle == 2 || handle == 7) x -= (10f - w); w = 10f }
+    if (h < 10f) { if (handle == 0 || handle == 1 || handle == 4) y -= (10f - h); h = 10f }
+    return o.copy(x = x, y = y, w = w, h = h)
+}
+
+@Composable
+fun EdObjView(o: EdObj, zoom: Float, selected: Boolean) {
+    Box(
+        Modifier.offset((o.x * zoom).dp, (o.y * zoom).dp)
+            .size((o.w * zoom).dp, (o.h * zoom).dp)
+    ) {
+        when (o.type) {
+            "text" -> Text(
+                o.text,
+                color = Color(o.color),
+                fontSize = (o.fontSize * zoom).sp,
+                fontWeight = if (o.bold) FontWeight.Bold else FontWeight.Normal,
+                lineHeight = (o.fontSize * 1.25f * zoom).sp,
+                modifier = Modifier.alpha(o.opacity)
+            )
+            "image" -> {
+                val bmp = remember(o.dataUrl) { o.dataUrl?.let { decodeBitmapFromDataUrl(it) } }
+                if (bmp != null) Image(bmp, null, Modifier.fillMaxSize().alpha(o.opacity), contentScale = ContentScale.FillBounds)
+                else Box(Modifier.fillMaxSize().background(Color(0xFFE2E8F0)))
+            }
+            "rect" -> Box(
+                Modifier.fillMaxSize().then(
+                    if (o.fill) Modifier.background(Color(o.color).copy(alpha = o.opacity))
+                    else Modifier.border((o.strokeWidth * zoom).dp, Color(o.color).copy(alpha = o.opacity))
+                )
+            )
+            "highlight" -> Box(Modifier.fillMaxSize().background(Color(o.color).copy(alpha = o.opacity)))
+            "redact" -> Box(Modifier.fillMaxSize().background(Color.Black))
+            "ellipse" -> Canvas(Modifier.fillMaxSize()) {
+                val col = Color(o.color).copy(alpha = o.opacity)
+                if (o.fill) drawOval(col)
+                else drawOval(col, style = Stroke(width = (o.strokeWidth * zoom).dp.toPx()))
+            }
+            "path" -> Canvas(Modifier.fillMaxSize()) {
+                val col = Color(o.color).copy(alpha = o.opacity)
+                for (i in 0 until o.points.size - 1) {
+                    val a = o.points[i]; val b = o.points[i + 1]
+                    if (a.first < 0 || b.first < 0) continue
+                    drawLine(col,
+                        Offset(a.first * size.width, a.second * size.height),
+                        Offset(b.first * size.width, b.second * size.height),
+                        strokeWidth = (o.strokeWidth * zoom).dp.toPx())
+                }
+            }
+        }
+        if (selected) {
+            Box(Modifier.fillMaxSize().border(1.5.dp, PurplePrimary))
+            if (o.type != "text") {
+                edHandles(o).forEach { hp ->
+                    Box(
+                        Modifier.offset(((hp.first - o.x) * zoom).dp - 5.dp, ((hp.second - o.y) * zoom).dp - 5.dp)
+                            .size(10.dp)
+                            .background(Color.White, RoundedCornerShape(3.dp))
+                            .border(1.5.dp, PurplePrimary, RoundedCornerShape(3.dp))
+                    )
+                }
+            }
+        }
+    }
+}
