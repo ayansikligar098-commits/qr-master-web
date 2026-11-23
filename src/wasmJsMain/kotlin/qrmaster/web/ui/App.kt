@@ -123,7 +123,7 @@ fun App() {
     LaunchedEffect(Unit) {
         val saved = SessionStore.load()
         if (saved != null) {
-            val now = kotlin.js.Date.now().toLong()
+            val now = qrmaster.web.data.nowMillis()
             val usable = if (saved.expiresAtMillis <= now + 60_000) {
                 FirebaseApi.refreshSession(saved) ?: saved
             } else saved
@@ -142,12 +142,13 @@ fun App() {
     QrMasterTheme(darkTheme = state.dark) {
         BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             val isDesktop = maxWidth >= 820.dp
+            val isWide = maxWidth >= 1180.dp
             if (isDesktop) {
                 Row(Modifier.fillMaxSize()) {
                     Sidebar(state, Modifier.width(264.dp).fillMaxHeight())
                     Column(Modifier.weight(1f).fillMaxHeight()) {
                         TopBar(state, showMenu = false) { }
-                        ScreenContent(state, wide = maxWidth >= 1180.dp, modifier = Modifier.weight(1f))
+                        ScreenContent(state, wide = isWide, modifier = Modifier.weight(1f))
                     }
                 }
             } else {

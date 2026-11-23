@@ -168,5 +168,10 @@ object FirebaseApi {
     private fun escapeJson(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 
-    private fun currentTimeMillis(): Long = kotlin.js.Date.now().toLong()
+    @OptIn(kotlin.time.ExperimentalTime::class)
+    private fun currentTimeMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 }
+
+
+@OptIn(kotlin.time.ExperimentalTime::class)
+fun nowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()

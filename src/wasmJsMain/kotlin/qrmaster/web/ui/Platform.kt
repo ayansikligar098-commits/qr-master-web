@@ -1,6 +1,6 @@
 package qrmaster.web.ui
 
-import kotlin.js.JsFun
+import kotlin.JsFun
 
 /**
  * Tiny browser bridges. The application itself is 100% Kotlin/Compose;
