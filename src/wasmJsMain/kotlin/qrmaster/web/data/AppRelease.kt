@@ -18,7 +18,7 @@ data class AppReleaseInfo(
 ) {
     /** File name for the browser download (last path segment of the APK URL). */
     val fileName: String
-        get() = apkUrl.substringAfterLast('/').ifBlank { "QRMaster.apk" }
+        get() = apkUrl.substringAfterLast('/').ifBlank { "Kitnook.apk" }
 }
 
 const val RELEASE_FEED_URL = "https://ayansikligar098-commits.github.io/version-native.json"

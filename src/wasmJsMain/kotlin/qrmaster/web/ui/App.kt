@@ -267,7 +267,7 @@ fun MobileShell(state: AppState) {
                 Spacer(Modifier.width(6.dp))
                 LogoMark(30.dp)
                 Spacer(Modifier.width(8.dp))
-                Text("QR Master", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = NavyText)
+                Text("Kitnook", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = NavyText)
                 Spacer(Modifier.weight(1f))
                 AvatarButton(state)
             }
@@ -412,7 +412,7 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
         ) {
             LogoMark(36.dp)
             Spacer(Modifier.width(10.dp))
-            Text("QR Master", fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = NavyText)
+            Text("Kitnook", fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = NavyText)
         }
         Spacer(Modifier.height(22.dp))
 

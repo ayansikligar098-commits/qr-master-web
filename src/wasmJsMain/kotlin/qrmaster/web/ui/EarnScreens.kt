@@ -192,7 +192,7 @@ fun InviteScreen(state: AppState) {
                                 enabled = link.isNotBlank(), shape = RoundedCornerShape(10.dp)
                             ) { Text("Copy Link", fontSize = 12.5.sp) }
                             OutlinedButton(
-                                onClick = { shareText("Join QR Master with my referral link and get free Premium days: $link") },
+                                onClick = { shareText("Join Kitnook with my referral link and get free Premium days: $link") },
                                 enabled = link.isNotBlank(), shape = RoundedCornerShape(10.dp)
                             ) { Text("Share", fontSize = 12.5.sp) }
                         }

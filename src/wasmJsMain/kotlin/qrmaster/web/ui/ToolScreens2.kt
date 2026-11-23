@@ -711,7 +711,7 @@ fun NotificationsScreen(state: AppState) {
         }
         item {
             Text(
-                "Tip: the +3 free-spin notification reward is managed in the QR Master Android app (it follows the phone's notification setting). Spins you earn there work here too — it is one account.",
+                "Tip: the +3 free-spin notification reward is managed in the Kitnook Android app (it follows the phone's notification setting). Spins you earn there work here too — it is one account.",
                 fontSize = 12.sp, color = MutedText
             )
         }
@@ -722,7 +722,7 @@ fun NotificationsScreen(state: AppState) {
 
 @Composable
 fun AboutScreen(state: AppState) {
-    ToolPage(IconKind.Info, "About Us", "QR Master — every tool in one place.") {
+    ToolPage(IconKind.Info, "About Us", "Kitnook — Everything You Need, One Nook.") {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
@@ -730,12 +730,12 @@ fun AboutScreen(state: AppState) {
                         LogoMark(44.dp)
                         Spacer(Modifier.width(12.dp))
                         Column {
-                            Text("QR Master", fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = NavyText)
+                            Text("Kitnook", fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = NavyText)
                             Text("Website version 1.0", fontSize = 12.sp, color = MutedText)
                         }
                     }
                     Text(
-                        "QR Master brings QR codes, barcodes, PDF and image tools, calculators, converters and the Spin & Earn rewards wallet together in one place. This website and the QR Master Android app share the same account, wallet and rewards.",
+                        "Kitnook brings QR codes, barcodes, PDF and image tools, calculators, converters and the Spin & Earn rewards wallet together in one place. This website and the Kitnook Android app share the same account, wallet and rewards.",
                         fontSize = 13.sp, color = MutedText
                     )
                     Text("What you can do here", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = NavyText)

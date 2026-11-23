@@ -429,7 +429,7 @@ fun AppDownloadCard(state: AppState) {
                 Spacer(Modifier.width(16.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Get the QR Master Android App",
+                        "Get the Kitnook Android App",
                         color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp
                     )
                     Spacer(Modifier.height(3.dp))
@@ -514,7 +514,7 @@ fun HomeToolCard(t: ToolCardDef, onClick: () -> Unit) {
 fun HeroBanner(state: AppState) {
     var heroQuery by remember { mutableStateOf("") }
     val heroQr = remember {
-        try { QrCode.encodeText("https://qrmaster-4ai.pages.dev/", QrEcc.MEDIUM) }
+        try { QrCode.encodeText("https://kitnook.pages.dev/", QrEcc.MEDIUM) }
         catch (e: Exception) { null }
     }
     BoxWithConstraints(
@@ -532,7 +532,7 @@ fun HeroBanner(state: AppState) {
         ) {
             Column(Modifier.weight(1.5f)) {
                 Text("Everything You Need,", fontSize = 31.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF141433), lineHeight = 36.sp)
-                Text("All in One Place.", fontSize = 31.sp, fontWeight = FontWeight.ExtraBold, color = PurplePrimary, lineHeight = 36.sp)
+                Text("One Nook.", fontSize = 31.sp, fontWeight = FontWeight.ExtraBold, color = PurplePrimary, lineHeight = 36.sp)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Create QR Codes, Edit Photos, Manage PDFs and Access Powerful Tools in One Platform.",
@@ -1010,7 +1010,7 @@ fun QrGeneratorScreen(state: AppState) {
                                             Modifier.fillMaxSize()
                                         )
                                     }
-                                    Text("QR Master", fontSize = 12.sp, color = MutedText)
+                                    Text("Kitnook", fontSize = 12.sp, color = MutedText)
                                     Button(
                                         onClick = {
                                             scope.launch {
@@ -2438,7 +2438,7 @@ fun SettingsScreen(state: AppState) {
                                             }
                                             Spacer(Modifier.width(12.dp))
                                             Column {
-                                                Text(profile?.name?.ifBlank { "QR Master User" } ?: "QR Master User", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText)
+                                                Text(profile?.name?.ifBlank { "Kitnook User" } ?: "Kitnook User", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText)
                                                 Text(state.user?.email ?: "", fontSize = 12.sp, color = MutedText)
                                             }
                                         }
@@ -2636,7 +2636,7 @@ fun SettingsScreen(state: AppState) {
                                     colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary)
                                 ) { Text("Open Notifications", fontSize = 12.5.sp) }
                                 Text(
-                                    "Free-spin reward: turning notifications ON in the QR Master Android app gives +3 free spins (once per account). " +
+                                    "Free-spin reward: turning notifications ON in the Kitnook Android app gives +3 free spins (once per account). " +
                                         "Used so far: ${profile?.notifSpinsUsed ?: 0}. That reward follows your phone's notification setting, so it is managed in the app — spins work on both.",
                                     fontSize = 12.sp, color = MutedText
                                 )
@@ -3297,9 +3297,9 @@ fun LoginScreen(state: AppState) {
                 verticalArrangement = Arrangement.spacedBy(13.dp)
             ) {
                 LogoMark(52.dp)
-                Text("Welcome to QR Master", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                Text("Welcome to Kitnook", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = NavyText)
                 Text(
-                    "Use the same account as the QR Master Android app.",
+                    "Use the same account as the Kitnook Android app.",
                     fontSize = 12.5.sp, color = MutedText, textAlign = TextAlign.Center
                 )
                 Row(
