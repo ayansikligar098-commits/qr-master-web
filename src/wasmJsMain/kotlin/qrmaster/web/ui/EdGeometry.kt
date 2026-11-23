@@ -95,6 +95,40 @@ fun edResizeLocked(b: EdBox, handle: Int, dx: Float, dy: Float): EdBox {
     return EdBox(x, y, w, h)
 }
 
+/**
+ * Handle hit test for the editor's drag wiring: the index of the handle
+ * NEAREST to the press point (page points, square/Chebyshev distance —
+ * the handles are drawn as squares), or -1 when no handle is within
+ * [tol]. The previous wiring scanned every handle and let the LAST one
+ * inside a fixed ±11 pt box win, so a press between two handles (small
+ * object, low zoom) could silently bind the wrong one — and a press that
+ * landed just outside the small box started a move instead of a resize.
+ */
+fun edPickHandle(handles: List<Pair<Float, Float>>, px: Float, py: Float, tol: Float): Int {
+    var best = -1
+    var bestD = Float.MAX_VALUE
+    handles.forEachIndexed { i, hp ->
+        val d = max(abs(px - hp.first), abs(py - hp.second))
+        if (d <= tol && d < bestD) { bestD = d; best = i }
+    }
+    return best
+}
+
+/**
+ * One step of a resize drag SESSION. A session is anchored at the object
+ * exactly as it was when the pointer went down ([start]) and is fed the
+ * pointer's TOTAL displacement from the press point — never per-event
+ * deltas accumulated onto the live object. That makes the result depend
+ * only on where the pointer is now: dropped, coalesced or reordered move
+ * events (all normal in a browser) cannot corrupt it, every intermediate
+ * box is a valid proportional resize of the same start box, and ending
+ * the session (release OR cancellation) at any moment leaves the last
+ * applied box in place — there is nothing to roll back.
+ */
+fun edResizeSession(start: EdBox, isImage: Boolean, handle: Int, totalDx: Float, totalDy: Float): EdBox =
+    if (isImage) edResizeLocked(start, handle, totalDx, totalDy)
+    else edResizeFree(start, handle, totalDx, totalDy)
+
 /** Properties-panel Width edit for an image: height follows proportionally. */
 fun edWithWidthLocked(b: EdBox, newW: Float): EdBox {
     val w = max(8f, newW)

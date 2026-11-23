@@ -127,6 +127,21 @@ data class EdPageState(
     val objects: List<EdObj> = emptyList()
 )
 
+/**
+ * The currently open document, held OUTSIDE the composable on purpose.
+ * The app shell swaps between its desktop and mobile layouts at 760 dp,
+ * which disposes and recreates this screen — with the document only in
+ * `remember`, crossing that breakpoint (window resize, device rotation)
+ * threw away the loaded PDF and every edit. The screen initialises from
+ * this cache and mirrors back into it; previews/thumbnails are not
+ * cached (they re-render from pdfB64 on restore).
+ */
+private object PdfEditorDocCache {
+    var pdfB64: String? = null
+    var fileName: String = ""
+    var pages: List<EdPageState> = emptyList()
+}
+
 private enum class EdTool { Select, Text, Draw, Highlight, Rect, Ellipse, Line, Redact, Crop }
 private enum class EdTab { Edit, Sign, Organize }
 
@@ -175,9 +190,9 @@ private suspend fun ensureEditorLibs(): String? {
 fun PdfEditorScreen(state: AppState) {
     val scope = rememberCoroutineScope()
     var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
-    var pdfB64 by remember { mutableStateOf<String?>(null) }
-    var fileName by remember { mutableStateOf("") }
-    var pages by remember { mutableStateOf<List<EdPageState>>(emptyList()) }
+    var pdfB64 by remember { mutableStateOf<String?>(PdfEditorDocCache.pdfB64) }
+    var fileName by remember { mutableStateOf(PdfEditorDocCache.fileName) }
+    var pages by remember { mutableStateOf(PdfEditorDocCache.pages) }
     var current by remember { mutableStateOf(0) }
     var tool by remember { mutableStateOf(EdTool.Select) }
     var tab by remember { mutableStateOf(EdTab.Edit) }
@@ -272,6 +287,23 @@ fun PdfEditorScreen(state: AppState) {
 
     fun renderCurrent() { scope.launch { renderOutPage(current, false) } }
     fun renderThumb(idx: Int) { scope.launch { renderOutPage(idx, true) } }
+
+    // Mirror the open document into the cache so a shell layout flip
+    // (desktop <-> mobile at 760 dp) can't lose it, and — when this screen
+    // was recreated with a document still open — re-render its pages
+    // (previews/thumbs/dims start empty after recreation).
+    LaunchedEffect(pdfB64, fileName, pages) {
+        PdfEditorDocCache.pdfB64 = pdfB64
+        PdfEditorDocCache.fileName = fileName
+        PdfEditorDocCache.pages = pages
+    }
+    LaunchedEffect(Unit) {
+        if (pages.isNotEmpty() && pdfB64 != null && previews.isEmpty()) {
+            statusText = "Opened ${pages.size} pages."
+            renderCurrent()
+            pages.indices.forEach { renderThumb(it) }
+        }
+    }
 
     // Load a newly picked PDF.
     LaunchedEffect(files.firstOrNull()?.id) {
@@ -678,13 +710,26 @@ fun PdfEditorScreen(state: AppState) {
                             var handle = -1
                             var grabDx = 0f; var grabDy = 0f
                             var didSnapshot = false
+                            // Resize session anchor: the object exactly as it
+                            // was at pointer-down. Every move recomputes the
+                            // box from THIS plus the pointer's total
+                            // displacement — per-event deltas accumulated
+                            // onto live state could be corrupted by dropped
+                            // or coalesced browser move events, which left
+                            // edge-handle drags uncommitted (the object
+                            // snapped back on release).
+                            var dragStartObj: EdObj? = null
                             val liveSel = livePage?.objects?.firstOrNull { it.id == selectedId }
                             if (tool == EdTool.Select && liveSel != null && liveSel.type != "text") {
-                                edHandles(liveSel).forEachIndexed { i, hp ->
-                                    if (abs(sx - hp.first) <= 11f && abs(sy - hp.second) <= 11f) handle = i
-                                }
+                                // Nearest handle within a zoom-aware tolerance
+                                // (the old scan used a fixed ±11 pt box and let
+                                // the LAST match win).
+                                val tol = (14f / zoom).coerceIn(11f, 40f)
+                                handle = edPickHandle(edHandles(liveSel), sx, sy, tol)
                             }
-                            if (handle >= 0 && liveSel != null) { mode = "resize"; dragId = liveSel.id }
+                            if (handle >= 0 && liveSel != null) {
+                                mode = "resize"; dragId = liveSel.id; dragStartObj = liveSel
+                            }
                             else when (tool) {
                                 EdTool.Select -> {
                                     val hit = livePage?.objects?.lastOrNull {
@@ -701,7 +746,11 @@ fun PdfEditorScreen(state: AppState) {
                                     mode = "rect"; draftRect = listOf(sx, sy, 0f, 0f)
                                 }
                             }
-                            var lastX = sx; var lastY = sy
+                            // A started gesture belongs to the canvas: consume
+                            // the press (and the moves below) so the two scroll
+                            // containers wrapping the canvas don't also claim
+                            // the drag and scroll the page away mid-resize.
+                            if (mode != "none") change.consume()
                             var released = false
                             while (!released) {
                                 val ev = awaitPointerEvent()
@@ -709,6 +758,7 @@ fun PdfEditorScreen(state: AppState) {
                                 val (cx, cy) = toPt(ch.position)
                                 when (ev.type) {
                                     PointerEventType.Move -> {
+                                        if (mode != "none") ch.consume()
                                         if (!didSnapshot && (mode == "move" || mode == "resize") &&
                                             (abs(cx - sx) > 1f || abs(cy - sy) > 1f)) { snapshot(); didSnapshot = true }
                                         when (mode) {
@@ -722,9 +772,14 @@ fun PdfEditorScreen(state: AppState) {
                                                 }))
                                             }
                                             "resize" -> {
-                                                val id = dragId; val p = pages.getOrNull(current)
-                                                if (id != null && p != null) replacePage(current, p.copy(objects = p.objects.map {
-                                                    if (it.id == id) edResize(it, handle, cx - lastX, cy - lastY) else it
+                                                // Session math: start object + TOTAL
+                                                // displacement from the press point.
+                                                // The rendered box IS the committed
+                                                // box at every instant, so release
+                                                // (or cancellation) simply keeps it.
+                                                val id = dragId; val startObj = dragStartObj; val p = pages.getOrNull(current)
+                                                if (id != null && startObj != null && p != null) replacePage(current, p.copy(objects = p.objects.map {
+                                                    if (it.id == id) edResize(startObj, handle, cx - sx, cy - sy) else it
                                                 }))
                                             }
                                             "draw" -> {
@@ -734,7 +789,6 @@ fun PdfEditorScreen(state: AppState) {
                                             }
                                             "rect" -> draftRect = listOf(min(sx, cx), min(sy, cy), abs(cx - sx), abs(cy - sy))
                                         }
-                                        lastX = cx; lastY = cy
                                     }
                                     PointerEventType.Release -> {
                                         released = true
@@ -932,6 +986,18 @@ fun PdfEditorScreen(state: AppState) {
         } else {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
               val wide = maxWidth >= 1150.dp
+              // Narrow layout: at 100% the page is far wider than the
+              // workspace (rail + padding leave ~310 dp at a 500 dp
+              // window), so the canvas viewport collapsed to a sliver
+              // behind two scrollbars. Fit the page width once — only
+              // while the user hasn't picked a zoom themselves.
+              LaunchedEffect(maxWidth, pages.isNotEmpty()) {
+                  if (!wide && pages.isNotEmpty() && zoom == 1f) {
+                      val pageW = dims[current]?.first ?: 595.28f
+                      val avail = (maxWidth.value - 190f).coerceAtLeast(150f)
+                      zoom = (avail / pageW).coerceIn(0.3f, 1f)
+                  }
+              }
               Column(Modifier.fillMaxSize()) {
                 Row(Modifier.weight(1f)) {
                 // ── thumbnails rail ──
@@ -1255,9 +1321,10 @@ fun edResize(o: EdObj, handle: Int, dx: Float, dy: Float): EdObj {
     // Images resize aspect-ratio-locked (any handle — corners AND edges —
     // scales the photo uniformly, so it can never be stretched or squeezed);
     // every other object type keeps the free resize. Math lives in
-    // EdGeometry.kt (pure, unit-tested).
-    val b = EdBox(o.x, o.y, o.w, o.h)
-    val r = if (o.type == "image") edResizeLocked(b, handle, dx, dy) else edResizeFree(b, handle, dx, dy)
+    // EdGeometry.kt (pure, unit-tested). The drag wiring calls this with
+    // the object as it was at pointer-down plus the pointer's TOTAL
+    // displacement (a drag session — see edResizeSession).
+    val r = edResizeSession(EdBox(o.x, o.y, o.w, o.h), o.type == "image", handle, dx, dy)
     return o.copy(x = r.x, y = r.y, w = r.w, h = r.h)
 }
 
