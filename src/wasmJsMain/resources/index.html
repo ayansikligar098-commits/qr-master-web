@@ -27,12 +27,14 @@
         }
 
         /* Adsterra banners (shell level — the Compose UI is untouched).
-           The app area shrinks by the bar height so the bottom strip never
-           covers app controls; closing the bar gives the space back. */
+           The app is mounted into #qm-app, which fills everything above
+           the ad strip; closing the bar gives the space back. */
         :root { --qm-ad-h: 106px; }
         @media (max-width: 760px) { :root { --qm-ad-h: 64px; } }
-        html { height: calc(100% - var(--qm-ad-h)); }
-        body { height: 100%; }
+        #qm-app {
+            position: fixed; top: 0; left: 0; right: 0;
+            bottom: var(--qm-ad-h);
+        }
         html.qm-ads-off { --qm-ad-h: 0px; }
         html.qm-ads-off #qm-adbar { display: none; }
         #qm-adbar {
@@ -847,6 +849,7 @@
     <script type="application/javascript" src="qrmaster.js"></script>
 </head>
 <body>
+<div id="qm-app"></div>
 <div id="qm-drop-overlay"><div class="qm-drop-box">Drop files here to add them</div></div>
 
 <!-- Adsterra — bottom banner bar (728x90 desktop / 320x50 mobile).
