@@ -1,8 +1,8 @@
 package qrmaster.web.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -15,20 +15,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
@@ -43,75 +43,81 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.browser.window
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import qrmaster.web.data.FirebaseApi
-import qrmaster.web.data.SessionStore
-import qrmaster.web.data.UserProfile
-import qrmaster.web.data.UserSession
+import qrmaster.web.data.Profile
+import qrmaster.web.data.WebUser
 
-enum class Screen { Dashboard, AllTools, QrGenerator, Wallet, Premium, Login, Placeholder }
+enum class Screen {
+    Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Tasks,
+    Settings, Premium, Login, Placeholder
+}
 
-data class ToolDef(
-    val name: String,
-    val desc: String,
-    val category: String,
-    val rating: String,
-    val icon: IconKind,
-    val tint: Color,
-    val target: Screen,
-    val placeholderTitle: String = ""
-)
+data class QrPreset(val typeLabel: String, val fieldLabel: String, val initialContent: String)
 
-val ToolCategories = listOf("All", "QR Tools", "PDF Tools", "Image Tools", "Earn", "Utilities")
-
-val AllToolsList = listOf(
-    ToolDef("QR Code Generator", "Text, URL, UPI ke liye QR banao", "QR Tools", "4.9", IconKind.Qr, Color(0xFF7C3AED), Screen.QrGenerator),
-    ToolDef("QR Code Scanner", "Camera ya photo se QR scan karo", "QR Tools", "4.8", IconKind.Scan, Color(0xFF2563EB), Screen.Placeholder, "QR Scanner"),
-    ToolDef("Barcode Generator", "Code 128, EAN, UPC barcodes", "QR Tools", "4.8", IconKind.Barcode, Color(0xFF0891B2), Screen.Placeholder, "Barcode Generator"),
-    ToolDef("PDF Converter", "PDF ko image/Word me badlo", "PDF Tools", "4.9", IconKind.Pdf, Color(0xFFDC2626), Screen.Placeholder, "PDF Converter"),
-    ToolDef("PDF Editor", "PDF pages edit, sign aur annotate", "PDF Tools", "4.7", IconKind.Edit, Color(0xFFEA580C), Screen.Placeholder, "PDF Editor"),
-    ToolDef("Merge & Split PDF", "PDF jodo ya alag karo", "PDF Tools", "4.8", IconKind.Merge, Color(0xFFDB2777), Screen.Placeholder, "PDF Merger & Splitter"),
-    ToolDef("Compress PDF", "PDF ka size chhota karo", "PDF Tools", "4.7", IconKind.Compress, Color(0xFF65A30D), Screen.Placeholder, "PDF Compressor"),
-    ToolDef("PDF Security", "PDF par password lagao/hatayo", "PDF Tools", "4.6", IconKind.Lock, Color(0xFF475569), Screen.Placeholder, "PDF Security"),
-    ToolDef("Document Scanner", "Document scan karke PDF banao", "Image Tools", "4.9", IconKind.FileText, Color(0xFF0D9488), Screen.Placeholder, "Document Scanner"),
-    ToolDef("Image Compressor", "Photo ka size kam karo", "Image Tools", "4.8", IconKind.Image, Color(0xFF9333EA), Screen.Placeholder, "Image Tools"),
-    ToolDef("Photo Editor", "Crop, filter aur background tools", "Image Tools", "4.6", IconKind.Edit, Color(0xFFF59E0B), Screen.Placeholder, "Photo Editor"),
-    ToolDef("UPI QR Generator", "UPI payment QR turant banao", "Utilities", "4.9", IconKind.Zap, Color(0xFF16A34A), Screen.QrGenerator),
-    ToolDef("Spin & Earn", "Roz spin karo, paise jeeto", "Earn", "4.8", IconKind.Spin, Color(0xFF7C3AED), Screen.Placeholder, "Spin & Earn"),
-    ToolDef("Tasks & Earn", "Tasks pure karo, reward pao", "Earn", "4.7", IconKind.Task, Color(0xFF2563EB), Screen.Placeholder, "Tasks & Earn"),
-    ToolDef("Watch & Earn", "Ads dekho aur kamao", "Earn", "4.6", IconKind.Play, Color(0xFFDC2626), Screen.Placeholder, "Watch & Earn"),
-    ToolDef("Daily Check-in", "Roz check-in, roz spin", "Earn", "4.7", IconKind.Calendar, Color(0xFF0891B2), Screen.Placeholder, "Daily Check-in")
-)
+val NavyText = Color(0xFF191938)
+val MutedText = Color(0xFF6E6A85)
 
 class AppState {
     var screen by mutableStateOf(Screen.Dashboard)
     var placeholderTitle by mutableStateOf("")
-    var dark by mutableStateOf(false)
-    var session by mutableStateOf<UserSession?>(null)
-    var profile by mutableStateOf<UserProfile?>(null)
-    var query by mutableStateOf("")
-    var snackbar by mutableStateOf<String?>(null)
+    var user by mutableStateOf<WebUser?>(FirebaseApi.session)
+    var profile by mutableStateOf<Profile?>(null)
+    var profileLoading by mutableStateOf(false)
+    var darkMode by mutableStateOf(false)
+    var searchQuery by mutableStateOf("")
+    var qrPreset by mutableStateOf<QrPreset?>(null)
+    var toastMessage by mutableStateOf<String?>(null)
     val activity = mutableStateListOf<String>()
 
-    fun navigate(s: Screen, title: String = "") {
-        screen = s
-        if (s == Screen.Placeholder) placeholderTitle = title
+    fun navigate(s: Screen) { screen = s }
+
+    fun openPlaceholder(title: String) {
+        placeholderTitle = title
+        screen = Screen.Placeholder
     }
 
-    fun openTool(tool: ToolDef) {
-        navigate(tool.target, tool.placeholderTitle.ifEmpty { tool.name })
+    fun openQr(preset: QrPreset?) {
+        qrPreset = preset
+        screen = Screen.QrGenerator
     }
 
-    fun toast(msg: String) { snackbar = msg }
+    fun applySearch(q: String) {
+        searchQuery = q
+        screen = Screen.AllTools
+    }
+
+    fun toast(msg: String) { toastMessage = msg }
 
     fun logActivity(text: String) {
         activity.add(0, text)
         while (activity.size > 8) activity.removeAt(activity.size - 1)
+    }
+
+    suspend fun refreshProfile() {
+        if (user == null) return
+        profileLoading = true
+        profile = FirebaseApi.fetchProfile()
+        profileLoading = false
+    }
+
+    fun onLoggedIn(u: WebUser) { user = u }
+
+    fun signOut() {
+        FirebaseApi.signOut()
+        user = null
+        profile = null
+        screen = Screen.Dashboard
+        toastMessage = "Logged out"
     }
 }
 
@@ -121,66 +127,112 @@ fun App() {
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        val saved = SessionStore.load()
-        if (saved != null) {
-            val now = qrmaster.web.data.nowMillis()
-            val usable = if (saved.expiresAtMillis <= now + 60_000) {
-                FirebaseApi.refreshSession(saved) ?: saved
-            } else saved
-            state.session = usable
-            state.profile = FirebaseApi.fetchProfile(usable)
+        try {
+            state.darkMode = window.localStorage.getItem("qm_dark") == "1"
+        } catch (e: Exception) { }
+        if (state.user != null) state.refreshProfile()
+    }
+    LaunchedEffect(state.toastMessage) {
+        if (state.toastMessage != null) {
+            delay(2800)
+            state.toastMessage = null
         }
     }
 
-    LaunchedEffect(state.snackbar) {
-        if (state.snackbar != null) {
-            delay(3200)
-            state.snackbar = null
-        }
-    }
-
-    QrMasterTheme(darkTheme = state.dark) {
-        BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            val isDesktop = maxWidth >= 820.dp
-            val isWide = maxWidth >= 1180.dp
-            if (isDesktop) {
-                Row(Modifier.fillMaxSize()) {
-                    Sidebar(state, Modifier.width(264.dp).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight()) {
-                        TopBar(state, showMenu = false) { }
-                        ScreenContent(state, wide = isWide, modifier = Modifier.weight(1f))
+    QrMasterTheme(darkTheme = state.darkMode) {
+        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize()) {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    if (maxWidth >= 760.dp) {
+                        DesktopShell(state)
+                    } else {
+                        MobileShell(state)
                     }
                 }
-            } else {
-                val drawerState = rememberDrawerState(DrawerValue.Closed)
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = {
-                        ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surface) {
-                            Sidebar(state, Modifier.width(280.dp).fillMaxHeight()) {
-                                scope.launch { drawerState.close() }
-                            }
-                        }
-                    }
-                ) {
-                    Column(Modifier.fillMaxSize()) {
-                        TopBar(state, showMenu = true) { scope.launch { drawerState.open() } }
-                        ScreenContent(state, wide = false, modifier = Modifier.weight(1f))
-                        BottomNav(state)
+                // Toast
+                val toast = state.toastMessage
+                if (toast != null) {
+                    Box(
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = 26.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color(0xFF232038))
+                            .padding(horizontal = 18.dp, vertical = 10.dp)
+                    ) {
+                        Text(toast, color = Color.White, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-            // Snackbar
-            state.snackbar?.let { msg ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF1E1B2E),
-                        shadowElevation = 6.dp,
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(msg, color = Color.White, modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
-                    }
+        }
+    }
+    // keep scope referenced for future shell actions
+    LaunchedEffect(scope) { }
+}
+
+@Composable
+fun DesktopShell(state: AppState) {
+    Row(Modifier.fillMaxSize()) {
+        Sidebar(state, Modifier.width(252.dp).fillMaxHeight())
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            TopBar(state)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                ScreenContent(state)
+            }
+        }
+    }
+}
+
+@Composable
+fun MobileShell(state: AppState) {
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surface) {
+                Sidebar(state, Modifier.width(272.dp).fillMaxHeight()) {
+                    scope.launch { drawerState.close() }
+                }
+            }
+        }
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+                        .clickable { scope.launch { drawerState.open() } },
+                    contentAlignment = Alignment.Center
+                ) {
+                    QrIcon(IconKind.Menu, MaterialTheme.colorScheme.onSurface, size = 22.dp)
+                }
+                Spacer(Modifier.width(6.dp))
+                LogoMark(30.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("QR Master", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = NavyText)
+                Spacer(Modifier.weight(1f))
+                AvatarButton(state)
+            }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                ScreenContent(state)
+            }
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                val items = listOf(
+                    Triple(Screen.Dashboard, IconKind.Home, "Home"),
+                    Triple(Screen.AllTools, IconKind.Grid, "Tools"),
+                    Triple(Screen.QrGenerator, IconKind.Qr, "QR"),
+                    Triple(Screen.Wallet, IconKind.Wallet, "Wallet"),
+                    Triple(Screen.Premium, IconKind.Crown, "Premium")
+                )
+                items.forEach { (s, icon, label) ->
+                    NavigationBarItem(
+                        selected = state.screen == s,
+                        onClick = { if (s == Screen.QrGenerator) state.openQr(null) else state.navigate(s) },
+                        icon = { QrIcon(icon, if (state.screen == s) PurplePrimary else MutedText, size = 21.dp) },
+                        label = { Text(label, fontSize = 11.sp) }
+                    )
                 }
             }
         }
@@ -188,252 +240,217 @@ fun App() {
 }
 
 @Composable
-fun ScreenContent(state: AppState, wide: Boolean, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize()) {
-        when (state.screen) {
-            Screen.Dashboard -> DashboardScreen(state, wide)
-            Screen.AllTools -> AllToolsScreen(state)
-            Screen.QrGenerator -> QrGeneratorScreen(state)
-            Screen.Wallet -> WalletScreen(state)
-            Screen.Premium -> PremiumScreen(state)
-            Screen.Login -> LoginScreen(state)
-            Screen.Placeholder -> PlaceholderScreen(state)
+fun LogoMark(size: androidx.compose.ui.unit.Dp) {
+    Box(
+        Modifier.size(size).clip(RoundedCornerShape(size * 0.28f))
+            .background(PurplePrimary),
+        contentAlignment = Alignment.Center
+    ) {
+        QrIcon(IconKind.Logo, Color.White, size = size * 0.68f)
+    }
+}
+
+@Composable
+fun AvatarButton(state: AppState) {
+    val initial = (state.profile?.name?.firstOrNull()
+        ?: state.user?.email?.firstOrNull()
+        ?: 'G').uppercaseChar().toString()
+    Box(
+        Modifier.size(38.dp).clip(CircleShape).background(PurplePrimary)
+            .clickable { state.navigate(if (state.user != null) Screen.Settings else Screen.Login) },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(initial, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+    }
+}
+
+@Composable
+fun TopBar(state: AppState) {
+    var query by remember { mutableStateOf("") }
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 22.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Search (reference: wide rounded field)
+        Row(
+            Modifier.weight(1f).widthIn(max = 560.dp).height(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            QrIcon(IconKind.Search, MutedText, size = 19.dp)
+            Spacer(Modifier.width(10.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 13.5.sp),
+                cursorBrush = SolidColor(PurplePrimary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { state.applySearch(query) }),
+                decorationBox = { inner ->
+                    Box {
+                        if (query.isEmpty()) {
+                            Text(
+                                "Search for tools... (e.g., QR, PDF converter, calculator)",
+                                color = MutedText, fontSize = 13.sp, maxLines = 1
+                            )
+                        }
+                        inner()
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
+        Spacer(Modifier.weight(0.6f))
+        // Theme toggle
+        Box(
+            Modifier.size(38.dp).clip(CircleShape)
+                .clickable {
+                    state.darkMode = !state.darkMode
+                    try {
+                        window.localStorage.setItem("qm_dark", if (state.darkMode) "1" else "0")
+                    } catch (e: Exception) { }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            QrIcon(if (state.darkMode) IconKind.Moon else IconKind.Sun, MutedText, size = 20.dp)
+        }
+        Spacer(Modifier.width(4.dp))
+        // Bell with badge dot
+        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+            QrIcon(IconKind.Bell, MutedText, size = 20.dp)
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 7.dp)
+                    .size(8.dp).clip(CircleShape).background(Color(0xFFEF4444))
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        AvatarButton(state)
     }
 }
 
 @Composable
 fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Unit = {}) {
     val colors = MaterialTheme.colorScheme
-    Surface(modifier, color = colors.surface, shadowElevation = 1.dp) {
-        Column(Modifier.fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 18.dp)) {
-            // Logo
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp)) {
-                Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(12.dp))
-                        .background(Brush.linearGradient(listOf(PurpleDeep, BlueAccent))),
-                    contentAlignment = Alignment.Center
-                ) {
-                    QrIcon(IconKind.Logo, Color.White, size = 26.dp)
-                }
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text("QR Master", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("All-in-One Tools", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                }
+    Column(
+        modifier.background(colors.surface)
+            .border(0.dp, Color.Transparent)
+            .padding(horizontal = 14.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            LogoMark(36.dp)
+            Spacer(Modifier.width(10.dp))
+            Text("QR Master", fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = NavyText)
+        }
+        Spacer(Modifier.height(22.dp))
+
+        NavItem(state, Screen.Dashboard, IconKind.Home, "Home", onNavigate)
+        NavItem(state, Screen.AllTools, IconKind.Grid, "All Tools", onNavigate)
+        NavItem(state, Screen.Wallet, IconKind.Wallet, "Wallet", onNavigate)
+        NavItem(state, Screen.Spin, IconKind.Spin, "Spin & Earn", onNavigate, badge = "New")
+        NavItem(state, Screen.Placeholder, IconKind.Gift, "Bonus Code", onNavigate, placeholder = "Bonus Code")
+        NavItem(state, Screen.Premium, IconKind.Crown, "Premium", onNavigate, crownGold = true)
+
+        Spacer(Modifier.height(18.dp))
+        Text(
+            "Tools", color = MutedText, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+        Spacer(Modifier.height(6.dp))
+        NavItem(state, Screen.Placeholder, IconKind.Clock, "History", onNavigate, placeholder = "History")
+        NavItem(state, Screen.Settings, IconKind.Gear, "Settings", onNavigate)
+        NavItem(state, Screen.Placeholder, IconKind.Help, "Help & Support", onNavigate, placeholder = "Help & Support")
+        NavItem(state, Screen.Placeholder, IconKind.Info, "About Us", onNavigate, placeholder = "About Us")
+
+        Spacer(Modifier.height(26.dp))
+        // Go Premium card (reference: light lavender)
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFFF0EAFE))
+                .padding(14.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                QrIcon(IconKind.Crown, Color(0xFFF59E0B), size = 18.dp)
+                Spacer(Modifier.width(7.dp))
+                Text("Go Premium", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = NavyText)
             }
-            Spacer(Modifier.height(22.dp))
-
-            SideSection("MAIN")
-            SideItem(state, IconKind.Home, "Home", Screen.Dashboard, onNavigate)
-            SideItem(state, IconKind.Grid, "All Tools", Screen.AllTools, onNavigate)
-
-            SideSection("TOOLS")
-            SideItem(state, IconKind.Qr, "QR Generator", Screen.QrGenerator, onNavigate)
-            SideItem(state, IconKind.Scan, "QR Scanner", Screen.Placeholder, onNavigate, "QR Scanner")
-            SideItem(state, IconKind.Barcode, "Barcode Generator", Screen.Placeholder, onNavigate, "Barcode Generator")
-            SideItem(state, IconKind.Pdf, "PDF Tools", Screen.Placeholder, onNavigate, "PDF Tools")
-            SideItem(state, IconKind.Image, "Image Tools", Screen.Placeholder, onNavigate, "Image Tools")
-            SideItem(state, IconKind.FileText, "Document Scanner", Screen.Placeholder, onNavigate, "Document Scanner")
-
-            SideSection("WALLET & EARN")
-            SideItem(state, IconKind.Wallet, "Wallet", Screen.Wallet, onNavigate)
-            SideItem(state, IconKind.Spin, "Spin & Earn", Screen.Placeholder, onNavigate, "Spin & Earn")
-            SideItem(state, IconKind.Calendar, "Daily Check-in", Screen.Placeholder, onNavigate, "Daily Check-in")
-            SideItem(state, IconKind.Gift, "Bonus Codes", Screen.Placeholder, onNavigate, "Bonus Codes")
-            SideItem(state, IconKind.Task, "Tasks & Earn", Screen.Placeholder, onNavigate, "Tasks & Earn")
-            SideItem(state, IconKind.Users, "Referral", Screen.Placeholder, onNavigate, "Referral System")
-            SideItem(state, IconKind.Play, "Watch & Earn", Screen.Placeholder, onNavigate, "Watch & Earn")
-            SideItem(state, IconKind.Crown, "Premium", Screen.Premium, onNavigate)
-
-            SideSection("GENERAL")
-            SideItem(state, IconKind.Clock, "History", Screen.Placeholder, onNavigate, "History")
-            SideItem(state, IconKind.Bell, "Notifications", Screen.Placeholder, onNavigate, "Notifications")
-            SideItem(state, IconKind.Gear, "Settings", Screen.Placeholder, onNavigate, "Settings")
-            SideItem(state, IconKind.Help, "Help & Support", Screen.Placeholder, onNavigate, "Help & Support")
-            SideItem(state, IconKind.Info, "About Us", Screen.Placeholder, onNavigate, "About Us")
-
-            Spacer(Modifier.height(18.dp))
-            // Go Premium mini banner (as in reference design)
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                modifier = Modifier.fillMaxWidth().clickable {
-                    state.navigate(Screen.Premium); onNavigate()
-                }
+            Spacer(Modifier.height(3.dp))
+            Text("Unlock More Features", color = MutedText, fontSize = 11.5.sp)
+            Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(10.dp))
+                    .background(PurplePrimary)
+                    .clickable { state.navigate(Screen.Premium); onNavigate() },
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    Modifier.fillMaxWidth()
-                        .background(Brush.linearGradient(listOf(Color(0xFF5B21B6), Color(0xFF2563EB))))
-                        .padding(14.dp)
-                ) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            QrIcon(IconKind.Crown, Color(0xFFFDE68A), size = 20.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Go Premium", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text("Unlock all tools & remove limits", color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(8.dp))
-                        Box(
-                            Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(horizontal = 14.dp, vertical = 6.dp)
-                        ) {
-                            Text("Upgrade Now", color = PurpleDeep, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            // User card at bottom
-            Card(
-                colors = CardDefaults.cardColors(containerColor = colors.primaryContainer),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().clickable {
-                    state.navigate(Screen.Login); onNavigate()
-                }
-            ) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AvatarCircle(state.session?.email ?: "G", 36.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            state.profile?.name ?: state.session?.email?.substringBefore("@") ?: "Guest User",
-                            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                        Text(
-                            if (state.session != null) "Logged in" else "Login / Register",
-                            style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant
-                        )
-                    }
-                    QrIcon(IconKind.Right, colors.onSurfaceVariant, size = 18.dp)
-                }
+                Text("Upgrade Now", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
             }
         }
+        Spacer(Modifier.height(10.dp))
     }
 }
 
 @Composable
-private fun SideSection(title: String) {
-    Text(
-        title,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 10.dp, top = 16.dp, bottom = 6.dp)
-    )
-}
-
-@Composable
-private fun SideItem(state: AppState, icon: IconKind, label: String, target: Screen, onNavigate: () -> Unit, placeholderTitle: String = "") {
-    val colors = MaterialTheme.colorScheme
-    val selected = state.screen == target && (target != Screen.Placeholder || state.placeholderTitle == placeholderTitle)
+fun NavItem(
+    state: AppState,
+    target: Screen,
+    icon: IconKind,
+    label: String,
+    onNavigate: () -> Unit,
+    badge: String? = null,
+    placeholder: String? = null,
+    crownGold: Boolean = false
+) {
+    val selected = if (placeholder != null) {
+        state.screen == Screen.Placeholder && state.placeholderTitle == placeholder
+    } else {
+        state.screen == target
+    }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-            .background(if (selected) colors.primaryContainer else Color.Transparent)
-            .clickable { state.navigate(target, placeholderTitle.ifEmpty { label }); onNavigate() }
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+        Modifier.fillMaxWidth().height(41.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Color(0xFFEFE9FF) else Color.Transparent)
+            .clickable {
+                if (placeholder != null) state.openPlaceholder(placeholder) else state.navigate(target)
+                onNavigate()
+            }
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        QrIcon(icon, if (selected) colors.primary else colors.onSurfaceVariant, size = 20.dp)
-        Spacer(Modifier.width(12.dp))
+        QrIcon(
+            icon,
+            when {
+                selected -> PurplePrimary
+                crownGold -> Color(0xFFF59E0B)
+                else -> Color(0xFF6E6A85)
+            },
+            size = 19.dp
+        )
+        Spacer(Modifier.width(11.dp))
         Text(
             label,
-            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) PurplePrimary else Color(0xFF3B3852),
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) colors.onPrimaryContainer else colors.onSurface
+            fontSize = 13.5.sp
         )
-    }
-}
-
-@Composable
-fun TopBar(state: AppState, showMenu: Boolean, onMenu: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Surface(color = colors.surface, shadowElevation = 1.dp) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            if (showMenu) {
-                IconCircleButton(IconKind.Menu, colors.onSurface) { onMenu() }
-            }
-            // Search
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = {
-                    state.query = it
-                    if (state.screen != Screen.Dashboard && state.screen != Screen.AllTools) state.navigate(Screen.Dashboard)
-                },
-                placeholder = { Text("Search tools... (QR, PDF, Image)") },
-                leadingIcon = { QrIcon(IconKind.Search, colors.onSurfaceVariant, size = 20.dp) },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.weight(1f)
-            )
-            Box {
-                IconCircleButton(IconKind.Bell, colors.onSurface) { state.navigate(Screen.Placeholder, "Notifications") }
-                Box(
-                    Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFEF4444))
-                        .align(Alignment.TopEnd)
-                )
-            }
-            IconCircleButton(if (state.dark) IconKind.Sun else IconKind.Moon, colors.onSurface) { state.dark = !state.dark }
-            if (state.session == null) {
-                Button(onClick = { state.navigate(Screen.Login) }, shape = RoundedCornerShape(20.dp)) {
-                    Text("Login")
-                }
-            } else {
-                Box(Modifier.clickable { state.navigate(Screen.Login) }) {
-                    AvatarCircle(state.session?.email ?: "U", 38.dp)
-                }
+        if (badge != null) {
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier.clip(RoundedCornerShape(6.dp)).background(PurplePrimary)
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(badge, color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
-}
-
-@Composable
-fun IconCircleButton(icon: IconKind, tint: Color, onClick: () -> Unit) {
-    Box(
-        Modifier.size(40.dp).clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        QrIcon(icon, tint, size = 20.dp)
-    }
-}
-
-@Composable
-fun AvatarCircle(text: String, size: androidx.compose.ui.unit.Dp) {
-    val initial = text.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    Box(
-        Modifier.size(size).clip(CircleShape)
-            .background(Brush.linearGradient(listOf(PurplePrimary, BlueAccent))),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(initial, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-@Composable
-fun BottomNav(state: AppState) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-        val items = listOf(
-            Triple(IconKind.Home, "Home", Screen.Dashboard),
-            Triple(IconKind.Grid, "Tools", Screen.AllTools),
-            Triple(IconKind.Qr, "Create", Screen.QrGenerator),
-            Triple(IconKind.Wallet, "Wallet", Screen.Wallet),
-            Triple(IconKind.Users, "Account", Screen.Login)
-        )
-        for ((icon, label, target) in items) {
-            NavigationBarItem(
-                selected = state.screen == target,
-                onClick = { state.navigate(target) },
-                icon = { QrIcon(icon, if (state.screen == target) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, size = 22.dp) },
-                label = { Text(label) }
-            )
-        }
-    }
+    Spacer(Modifier.height(2.dp))
 }

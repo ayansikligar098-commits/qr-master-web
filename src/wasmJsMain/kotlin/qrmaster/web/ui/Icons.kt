@@ -24,7 +24,7 @@ enum class IconKind {
     Logo, Home, Grid, Qr, Scan, Barcode, Pdf, Image, Wallet, Spin, Calendar, Gift,
     Task, Users, Play, Crown, Clock, Bell, Gear, Help, Info, Search, Sun, Moon,
     Menu, Download, Right, Back, Star, Zap, Shield, Merge, Lock, Logout, Eye,
-    EyeOff, Check, Edit, Compress, FileText
+    EyeOff, Check, Edit, Compress, FileText, Music, Share, Printer, Percent, Calc, Swap
 }
 
 @Composable
@@ -310,6 +310,44 @@ private fun DrawScope.drawIcon(kind: IconKind, c: Color) {
             line(c, 0.64f, 0.14f, 0.64f, 0.4f, w); line(c, 0.5f, 0.3f, 0.64f, 0.44f, w); line(c, 0.78f, 0.3f, 0.64f, 0.44f, w)
             line(c, 0.36f, 0.86f, 0.36f, 0.6f, w); line(c, 0.22f, 0.7f, 0.36f, 0.56f, w); line(c, 0.5f, 0.7f, 0.36f, 0.56f, w)
             line(c, 0.64f, 0.86f, 0.64f, 0.6f, w); line(c, 0.5f, 0.7f, 0.64f, 0.56f, w); line(c, 0.78f, 0.7f, 0.64f, 0.56f, w)
+        }
+        IconKind.Music -> {
+            circle(c, 0.33f, 0.74f, 0.11f, w, fill = true)
+            circle(c, 0.73f, 0.66f, 0.11f, w, fill = true)
+            line(c, 0.44f, 0.74f, 0.44f, 0.26f, w)
+            line(c, 0.84f, 0.66f, 0.84f, 0.18f, w)
+            line(c, 0.44f, 0.26f, 0.84f, 0.18f, w + 0.05f)
+        }
+        IconKind.Share -> {
+            circle(c, 0.24f, 0.5f, 0.1f, w)
+            circle(c, 0.76f, 0.2f, 0.1f, w)
+            circle(c, 0.76f, 0.8f, 0.1f, w)
+            line(c, 0.32f, 0.45f, 0.67f, 0.25f, w)
+            line(c, 0.32f, 0.55f, 0.67f, 0.75f, w)
+        }
+        IconKind.Printer -> {
+            rrect(c, 0.3f, 0.1f, 0.4f, 0.26f, 0.02f, w)
+            rrect(c, 0.16f, 0.32f, 0.68f, 0.36f, 0.05f, w)
+            rrect(c, 0.3f, 0.56f, 0.4f, 0.32f, 0.02f, w)
+            circle(c, 0.74f, 0.44f, 0.03f, w, fill = true)
+        }
+        IconKind.Percent -> {
+            line(c, 0.8f, 0.14f, 0.2f, 0.86f, w + 0.02f)
+            circle(c, 0.3f, 0.28f, 0.12f, w)
+            circle(c, 0.7f, 0.72f, 0.12f, w)
+        }
+        IconKind.Calc -> {
+            rrect(c, 0.2f, 0.08f, 0.6f, 0.84f, 0.06f, w)
+            line(c, 0.32f, 0.24f, 0.68f, 0.24f, w + 0.03f)
+            circle(c, 0.36f, 0.44f, 0.035f, w, fill = true); circle(c, 0.5f, 0.44f, 0.035f, w, fill = true); circle(c, 0.64f, 0.44f, 0.035f, w, fill = true)
+            circle(c, 0.36f, 0.6f, 0.035f, w, fill = true); circle(c, 0.5f, 0.6f, 0.035f, w, fill = true); circle(c, 0.64f, 0.6f, 0.035f, w, fill = true)
+            circle(c, 0.36f, 0.76f, 0.035f, w, fill = true); circle(c, 0.5f, 0.76f, 0.035f, w, fill = true); circle(c, 0.64f, 0.76f, 0.035f, w, fill = true)
+        }
+        IconKind.Swap -> {
+            line(c, 0.16f, 0.34f, 0.76f, 0.34f, w)
+            line(c, 0.62f, 0.2f, 0.78f, 0.34f, w); line(c, 0.62f, 0.48f, 0.78f, 0.34f, w)
+            line(c, 0.84f, 0.66f, 0.24f, 0.66f, w)
+            line(c, 0.38f, 0.52f, 0.22f, 0.66f, w); line(c, 0.38f, 0.8f, 0.22f, 0.66f, w)
         }
     }
 }

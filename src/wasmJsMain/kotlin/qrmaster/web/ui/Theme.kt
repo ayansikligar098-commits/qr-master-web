@@ -10,7 +10,7 @@ import androidx.compose.ui.graphics.Color
 val PurplePrimary = Color(0xFF6D28D9)
 val PurpleDeep = Color(0xFF5B21B6)
 val BlueAccent = Color(0xFF2563EB)
-val LightBg = Color(0xFFF5F3FF)
+val LightBg = Color(0xFFF6F6FB)
 val DarkBg = Color(0xFF0F0D1A)
 val DarkSurface = Color(0xFF1B1830)
 val DarkSidebar = Color(0xFF17142A)
