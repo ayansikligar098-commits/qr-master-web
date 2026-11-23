@@ -431,9 +431,9 @@ fun PdfEditorScreen(state: AppState) {
                     val conv = awaitAsync("img", 60_000)
                     if (conv != null && conv.asyncOk()) dataUrl = conv.asyncStr("dataUrl")
                 }
-                val maxW = pageDims.first * 0.55f
-                val w = if (iw > 0) min(iw.toFloat(), maxW) else min(220f, maxW)
-                val h = if (iw > 0 && ih > 0) w * ih / iw else w * 0.75f
+                // Sensible starting size: natural ratio, at most ~35% of the
+                // page wide / ~45% tall (edFitNewImage) — never page-filling.
+                val (w, h) = edFitNewImage(iw, ih, pageDims.first, pageDims.second)
                 addObject(EdObj(nextId++, "image",
                     x = (pageDims.first - w) / 2f, y = (pageDims.second - h) / 2f,
                     w = w, h = h, dataUrl = dataUrl))
@@ -510,8 +510,20 @@ fun PdfEditorScreen(state: AppState) {
                         }
                         Spacer(Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            EdNumField("Width", sel.w) { v -> mutateSelected { it.copy(w = max(8f, v)) } }
-                            EdNumField("Height", sel.h) { v -> mutateSelected { it.copy(h = max(8f, v)) } }
+                            // For images the two fields stay locked to the
+                            // photo's ratio: editing one updates the other.
+                            EdNumField("Width", sel.w) { v -> mutateSelected {
+                                if (it.type == "image") {
+                                    val r = edWithWidthLocked(EdBox(it.x, it.y, it.w, it.h), v)
+                                    it.copy(w = r.w, h = r.h)
+                                } else it.copy(w = max(8f, v))
+                            } }
+                            EdNumField("Height", sel.h) { v -> mutateSelected {
+                                if (it.type == "image") {
+                                    val r = edWithHeightLocked(EdBox(it.x, it.y, it.w, it.h), v)
+                                    it.copy(w = r.w, h = r.h)
+                                } else it.copy(h = max(8f, v))
+                            } }
                         }
                     }
                     item {
@@ -532,8 +544,22 @@ fun PdfEditorScreen(state: AppState) {
                                             val conv = awaitAsync("img", 60_000)
                                             if (conv != null && conv.asyncOk()) dataUrl = conv.asyncStr("dataUrl")
                                         }
+                                        // Refit the box to the NEW photo's ratio
+                                        // (width kept) so a differently-shaped
+                                        // replacement is never stretched.
+                                        var iw = 0; var ih = 0
+                                        imgOp("info", buildJsonObject { put("dataUrl", dataUrl) }.toString())
+                                        val info = awaitAsync("img", 60_000)
+                                        if (info != null && info.asyncOk()) {
+                                            iw = info.asyncStr("w").toIntOrNull() ?: 0
+                                            ih = info.asyncStr("h").toIntOrNull() ?: 0
+                                        }
                                         snapshot()
-                                        mutateSelected { it.copy(dataUrl = dataUrl) }
+                                        mutateSelected {
+                                            if (iw > 0 && ih > 0 && it.w > 0f)
+                                                it.copy(dataUrl = dataUrl, h = it.w * ih / iw)
+                                            else it.copy(dataUrl = dataUrl)
+                                        }
                                     }
                                 }
                             }, modifier = Modifier.fillMaxWidth()) { Text("Replace Image", fontSize = 13.sp) }
@@ -1226,20 +1252,13 @@ fun edHandles(o: EdObj): List<Pair<Float, Float>> = listOf(
 )
 
 fun edResize(o: EdObj, handle: Int, dx: Float, dy: Float): EdObj {
-    var x = o.x; var y = o.y; var w = o.w; var h = o.h
-    when (handle) {
-        0 -> { x += dx; w -= dx; y += dy; h -= dy }
-        1 -> { w += dx; y += dy; h -= dy }
-        2 -> { x += dx; w -= dx; h += dy }
-        3 -> { w += dx; h += dy }
-        4 -> { y += dy; h -= dy }
-        5 -> { w += dx }
-        6 -> { h += dy }
-        7 -> { x += dx; w -= dx }
-    }
-    if (w < 10f) { if (handle == 0 || handle == 2 || handle == 7) x -= (10f - w); w = 10f }
-    if (h < 10f) { if (handle == 0 || handle == 1 || handle == 4) y -= (10f - h); h = 10f }
-    return o.copy(x = x, y = y, w = w, h = h)
+    // Images resize aspect-ratio-locked (any handle — corners AND edges —
+    // scales the photo uniformly, so it can never be stretched or squeezed);
+    // every other object type keeps the free resize. Math lives in
+    // EdGeometry.kt (pure, unit-tested).
+    val b = EdBox(o.x, o.y, o.w, o.h)
+    val r = if (o.type == "image") edResizeLocked(b, handle, dx, dy) else edResizeFree(b, handle, dx, dy)
+    return o.copy(x = r.x, y = r.y, w = r.w, h = r.h)
 }
 
 @Composable
