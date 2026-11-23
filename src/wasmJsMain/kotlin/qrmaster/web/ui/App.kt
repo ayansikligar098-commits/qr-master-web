@@ -53,11 +53,14 @@ import androidx.compose.ui.unit.sp
 import kotlinx.browser.window
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import qrmaster.web.data.AppReleaseInfo
 import qrmaster.web.data.EarnApi
 import qrmaster.web.data.FirebaseApi
 import qrmaster.web.data.Profile
+import qrmaster.web.data.RELEASES_PAGE_URL
 import qrmaster.web.data.WebUser
 import qrmaster.web.data.ensureReferralProfile
+import qrmaster.web.data.fetchAppRelease
 
 enum class Screen {
     Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Tasks,
@@ -85,6 +88,18 @@ class AppState {
     var notifDot by mutableStateOf(false)
     var toastMessage by mutableStateOf<String?>(null)
     val activity = mutableStateListOf<String>()
+
+    // Latest Android app release (version feed) — shared by the Home
+    // download card and the sidebar Download App button. Null + not
+    // failed = still loading.
+    var appRelease by mutableStateOf<AppReleaseInfo?>(null)
+    var appReleaseFailed by mutableStateOf(false)
+
+    suspend fun loadAppRelease() {
+        if (appRelease != null || appReleaseFailed) return
+        val r = fetchAppRelease()
+        if (r != null) appRelease = r else appReleaseFailed = true
+    }
 
     fun navigate(s: Screen) { screen = s }
 
@@ -133,6 +148,20 @@ class AppState {
     }
 }
 
+/**
+ * The one download action behind the Home card and the sidebar button:
+ * latest APK when the version feed loaded, the public releases page
+ * when it failed, and an honest "still checking" toast while loading.
+ */
+fun downloadAppAction(state: AppState) {
+    val rel = state.appRelease
+    when {
+        rel != null -> downloadUrl(rel.apkUrl, rel.fileName)
+        state.appReleaseFailed -> openExternal(RELEASES_PAGE_URL)
+        else -> state.toast("Checking for the latest app version…")
+    }
+}
+
 @Composable
 fun App() {
     val state = remember { AppState() }
@@ -151,6 +180,7 @@ fun App() {
             }
         } catch (e: Exception) { }
         if (state.user != null) state.refreshProfile()
+        state.loadAppRelease()
     }
     LaunchedEffect(state.user) {
         if (state.user != null) {
@@ -427,6 +457,25 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
                 contentAlignment = Alignment.Center
             ) {
                 Text("Upgrade Now", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        // Download the Android app (compact; version shows once the
+        // version feed has loaded — see AppState.loadAppRelease).
+        Row(
+            Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFFEFE9FF))
+                .clickable { downloadAppAction(state); onNavigate() }
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            QrIcon(IconKind.Download, PurplePrimary, size = 18.dp)
+            Spacer(Modifier.width(10.dp))
+            Text("Download App", color = PurpleDeep, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            val rel = state.appRelease
+            if (rel != null && rel.versionName.isNotBlank()) {
+                Spacer(Modifier.weight(1f))
+                Text("v${rel.versionName}", color = MutedText, fontSize = 11.sp)
             }
         }
         Spacer(Modifier.height(10.dp))

@@ -40,6 +40,26 @@ external fun shareText(text: String): String
 @JsFun("(url) => { window.open(url, '_blank'); }")
 external fun openExternal(url: String)
 
+/**
+ * Starts a real browser download of a remote file (the Android APK).
+ * An anchor with a `download` attribute is clicked; the release host
+ * answers with Content-Disposition: attachment, so the browser saves
+ * the file instead of navigating away from the site.
+ */
+@JsFun(
+    """(url, name) => {
+        const a = document.createElement('a');
+        a.href = url;
+        if (name) a.download = name;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }"""
+)
+external fun downloadUrl(url: String, name: String)
+
 /** Opens a native file picker; result is polled via [pollPickedFile]. Returns a pick id. */
 @JsFun(
     """(accept, withData) => {

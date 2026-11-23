@@ -343,6 +343,7 @@ fun DashboardScreen(state: AppState) {
     ) {
         item { Spacer(Modifier.height(2.dp)) }
         item { HeroBanner(state) }
+        item { AppDownloadCard(state) }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 chips.forEach { c ->
@@ -389,6 +390,97 @@ fun DashboardScreen(state: AppState) {
             }
         }
         item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+/**
+ * "Get the Android App" card on Home. Version + download target come
+ * live from the public version feed (AppState.loadAppRelease): while
+ * loading the button shows a spinner, on failure it honestly falls
+ * back to the public releases page.
+ */
+@Composable
+fun AppDownloadCard(state: AppState) {
+    val rel = state.appRelease
+    val failed = state.appReleaseFailed
+    val loading = rel == null && !failed
+    BoxWithConstraints(
+        Modifier.fillMaxWidth()
+            .shadow(4.dp, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(Color(0xFF6D28D9), Color(0xFF4F46E5), Color(0xFF2563EB))
+                )
+            )
+    ) {
+        val wide = maxWidth >= 640.dp
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(54.dp).clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    QrIcon(IconKind.Download, Color.White, size = 28.dp)
+                }
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Get the QR Master Android App",
+                        color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "Every tool from this website — plus Spin & Earn, Tasks and your Wallet — in one app on your phone.",
+                        color = Color.White.copy(alpha = 0.88f), fontSize = 12.5.sp, lineHeight = 17.sp
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        when {
+                            rel != null -> "Version ${rel.versionName} (Build ${rel.versionCode}) • Latest release"
+                            failed -> "Latest version details are unavailable right now"
+                            else -> "Checking for the latest version…"
+                        },
+                        color = Color.White.copy(alpha = 0.75f), fontSize = 11.5.sp
+                    )
+                }
+            }
+            Spacer(Modifier.height(15.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = if (wide) Arrangement.End else Arrangement.Start
+            ) {
+                Box(
+                    Modifier.then(if (wide) Modifier else Modifier.fillMaxWidth())
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White)
+                        .clickable(enabled = !loading) { downloadAppAction(state) }
+                        .padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (loading) {
+                            CircularProgressIndicator(
+                                Modifier.size(16.dp), color = PurplePrimary, strokeWidth = 2.dp
+                            )
+                        } else {
+                            QrIcon(IconKind.Download, PurplePrimary, size = 18.dp)
+                        }
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            when {
+                                rel != null -> "Download APK"
+                                failed -> "View All Releases"
+                                else -> "Please wait…"
+                            },
+                            color = PurplePrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
