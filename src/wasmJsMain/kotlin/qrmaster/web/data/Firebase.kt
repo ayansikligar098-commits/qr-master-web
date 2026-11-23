@@ -60,10 +60,16 @@ data class WebUser(
 
 data class Profile(
     val name: String = "",
+    val email: String = "",
     val walletPaise: Long = 0,
     val credits: Long = 0,
     val isPremium: Boolean = false,
     val premiumExpiryMs: Long = 0,
+    val premiumStatus: String = "FREE",
+    val plan: String = "",
+    val banned: Boolean = false,
+    val walletFrozen: Boolean = false,
+    val walletFreezeReason: String = "",
     val spinUsedToday: Long = 0,
     val spinDate: String = "",
     val giftSpins: Long = 0,
@@ -71,7 +77,10 @@ data class Profile(
     val notifSpins: Long = 0,
     val notifSpinsUsed: Long = 0,
     val spinDebt: Long = 0,
-    val checkinDate: String = ""
+    val checkinDate: String = "",
+    val checkinStreak: Long = 0,
+    val referCode: String = "",
+    val referralRedeemed: Boolean = false
 )
 
 data class TaskItem(
@@ -434,12 +443,31 @@ object FirebaseApi {
             val res = httpRequest("GET", "$FS_BASE/users/${s.uid}", token = token)
             val doc = json.parseToJsonElement(res).jsonObject
             val f = fieldsOf(doc) ?: return Profile()
+            // Production docs carry premium/premiumUntil (the app's fields);
+            // isPremium/premiumExpiry are legacy fallbacks only.
+            val pFlag = if (f.containsKey("premium")) f.fBool("premium") else f.fBool("isPremium")
+            val pUntil = if (f.containsKey("premiumUntil")) f.fTimestampMs("premiumUntil")
+                         else f.fTimestampMs("premiumExpiry")
+            val email = f.fStr("email").ifBlank { s.email }
+            val now = nowMillis()
+            val status = when {
+                email.equals("ayansikligar98@gmail.com", ignoreCase = true) -> "OWNER"
+                pFlag && pUntil > now -> "ACTIVE"
+                pFlag && pUntil > 0L -> "EXPIRED"
+                else -> "FREE"
+            }
             Profile(
                 name = f.fStr("name"),
+                email = email,
                 walletPaise = f.fLong("walletBalancePaise"),
                 credits = f.fLong("credits"),
-                isPremium = f.fBool("isPremium"),
-                premiumExpiryMs = f.fTimestampMs("premiumExpiry"),
+                isPremium = status == "ACTIVE" || status == "OWNER",
+                premiumExpiryMs = pUntil,
+                premiumStatus = status,
+                plan = f.fStr("plan"),
+                banned = f.fBool("banned"),
+                walletFrozen = f.fBool("walletFrozen"),
+                walletFreezeReason = f.fStr("walletFreezeReason"),
                 spinUsedToday = f.fLong("spinUsedToday"),
                 spinDate = f.fStr("spinDate"),
                 giftSpins = f.fLong("giftSpins"),
@@ -447,7 +475,10 @@ object FirebaseApi {
                 notifSpins = f.fLong("notifRewardSpins"),
                 notifSpinsUsed = f.fLong("notifSpinsUsed"),
                 spinDebt = f.fLong("spinDebt"),
-                checkinDate = f.fStr("checkinDate")
+                checkinDate = f.fStr("checkinDate"),
+                checkinStreak = f.fLong("checkinStreak"),
+                referCode = f.fStr("referCode"),
+                referralRedeemed = f.fBool("referralRedeemed")
             )
         } catch (e: Exception) {
             null
@@ -542,6 +573,50 @@ object FirebaseApi {
                     subtitle = "Bonus redeemed",
                     amountText = "+₹" + fmtPaise(f.fLong("amountPaise")),
                     positive = true,
+                    status = "",
+                    createdAtMs = f.fTimestampMs("createdAt")
+                )
+            }
+        } catch (e: Exception) { }
+        try {
+            // The Android app's real collection name (bonusRedeems).
+            val seenBonus = out.filter { it.title.startsWith("Bonus Code") }
+                .map { it.createdAtMs to it.amountText }.toSet()
+            for (d in runQueryByUid("bonusRedeems", s.uid, 10)) {
+                val f = fieldsOf(d) ?: continue
+                val item = HistoryItem(
+                    title = "Bonus Code — " + f.fStr("code"),
+                    subtitle = "Bonus redeemed",
+                    amountText = "+₹" + fmtPaise(f.fLong("amountPaise")),
+                    positive = true,
+                    status = "",
+                    createdAtMs = f.fTimestampMs("createdAt")
+                )
+                if ((item.createdAtMs to item.amountText) !in seenBonus) out += item
+            }
+        } catch (e: Exception) { }
+        try {
+            for (d in runQueryByUid("spinWins", s.uid, 15)) {
+                val f = fieldsOf(d) ?: continue
+                out += HistoryItem(
+                    title = "Spin & Earn",
+                    subtitle = "Spin reward",
+                    amountText = "+₹" + fmtPaise(f.fLong("prizePaise")),
+                    positive = true,
+                    status = f.fStr("status").ifBlank { "credited" },
+                    createdAtMs = f.fTimestampMs("createdAt")
+                )
+            }
+        } catch (e: Exception) { }
+        try {
+            for (d in runQueryByUid("walletAdjusts", s.uid, 10)) {
+                val f = fieldsOf(d) ?: continue
+                val amt = f.fLong("amountPaise")
+                out += HistoryItem(
+                    title = "Wallet Adjustment",
+                    subtitle = f.fStr("reason").ifBlank { f.fStr("type") },
+                    amountText = (if (amt >= 0) "+₹" else "-₹") + fmtPaise(kotlin.math.abs(amt)),
+                    positive = amt >= 0,
                     status = "",
                     createdAtMs = f.fTimestampMs("createdAt")
                 )

@@ -7,8 +7,610 @@
     <link type="text/css" rel="stylesheet" href="styles.css">
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+    <style>
+        /* Full-page drag & drop overlay (shell level — the Compose canvas
+           cannot receive HTML5 drop events, so the shell owns this). */
+        #qm-drop-overlay {
+            display: none;
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(124, 58, 237, 0.10);
+            pointer-events: none;
+        }
+        #qm-drop-overlay .qm-drop-box {
+            position: absolute; inset: 22px;
+            border: 3px dashed #7C3AED; border-radius: 22px;
+            background: rgba(255, 255, 255, 0.88);
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            color: #5B21B6; font-size: 26px; font-weight: 700;
+            text-align: center; padding: 24px;
+        }
+    </style>
+    <script>
+    // ── QR Master shell tool bridges ─────────────────────────────────────
+    // The Compose Wasm canvas cannot receive HTML5 file drops and cannot
+    // run the heavy JS tool libraries directly, so the shell owns:
+    //   1) a unified File registry (picked + dropped files, bytes on demand)
+    //   2) document-level drag & drop with a DOM overlay
+    //   3) lazy-loaded pdf-lib / pdf.js / background-removal helpers
+    // All async results are delivered through window.__qmAsync[key] as JSON
+    // strings, which the Kotlin side polls (same pattern as Google sign-in).
+    window.__qmAsync = {};
+    window.__qmFiles = {};        // id -> File
+    window.__qmFileSeq = 0;
+    window.__qmPickedQ = [];      // metadata JSON strings
+    window.__qmDroppedQ = [];     // metadata JSON strings
+
+    function qmRegisterFile(f, queue) {
+        window.__qmFileSeq += 1;
+        var id = 'f' + window.__qmFileSeq;
+        window.__qmFiles[id] = f;
+        queue.push(JSON.stringify({ id: id, name: f.name || 'file', type: f.type || '', size: f.size || 0 }));
+        return id;
+    }
+
+    // ── Drag & drop (document level) ─────────────────────────────────────
+    (function () {
+        var dragDepth = 0;
+        function overlay() { return document.getElementById('qm-drop-overlay'); }
+        function hasFiles(e) {
+            try {
+                var t = e.dataTransfer && e.dataTransfer.types;
+                if (!t) return false;
+                for (var i = 0; i < t.length; i++) if (t[i] === 'Files') return true;
+            } catch (err) {}
+            return false;
+        }
+        document.addEventListener('dragenter', function (e) {
+            e.preventDefault();
+            if (!hasFiles(e)) return;
+            dragDepth++;
+            var o = overlay(); if (o) o.style.display = 'block';
+        });
+        document.addEventListener('dragover', function (e) {
+            e.preventDefault(); // never let the browser open the file
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        });
+        document.addEventListener('dragleave', function (e) {
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (dragDepth === 0) { var o = overlay(); if (o) o.style.display = 'none'; }
+        });
+        document.addEventListener('drop', function (e) {
+            e.preventDefault();
+            dragDepth = 0;
+            var o = overlay(); if (o) o.style.display = 'none';
+            var files = (e.dataTransfer && e.dataTransfer.files) || [];
+            for (var i = 0; i < files.length; i++) qmRegisterFile(files[i], window.__qmDroppedQ);
+        });
+        window.addEventListener('dragend', function () {
+            dragDepth = 0;
+            var o = overlay(); if (o) o.style.display = 'none';
+        });
+    })();
+
+    // ── Lazy script loader ───────────────────────────────────────────────
+    window.__qmLibState = {}; // name -> 'loading' | 'ready' | 'error:...'
+    function qmLoadScript(name, url) {
+        if (window.__qmLibState[name] === 'ready' || window.__qmLibState[name] === 'loading') return;
+        window.__qmLibState[name] = 'loading';
+        var s = document.createElement('script');
+        s.src = url;
+        s.onload = function () { window.__qmLibState[name] = 'ready'; };
+        s.onerror = function () { window.__qmLibState[name] = 'error:Could not load ' + name + '. Check your connection.'; };
+        document.head.appendChild(s);
+    }
+    window.__qmLoadPdfLibs = function () {
+        qmLoadScript('pdflib', 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+        qmLoadScript('pdfjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js');
+    };
+    window.__qmLibStatus = function () {
+        var a = window.__qmLibState['pdflib'] || 'idle';
+        var b = window.__qmLibState['pdfjs'] || 'idle';
+        if (a.indexOf('error') === 0) return a;
+        if (b.indexOf('error') === 0) return b;
+        if (a === 'ready' && b === 'ready') {
+            try { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'; } catch (e) {}
+            return 'ready';
+        }
+        return 'loading';
+    };
+
+    function qmB64ToBytes(b64) {
+        var bin = atob(b64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes;
+    }
+    function qmBytesToB64(bytes) {
+        var bin = '';
+        var CH = 0x8000;
+        for (var i = 0; i < bytes.length; i += CH) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+        }
+        return btoa(bin);
+    }
+    function qmSetAsync(key, obj) { window.__qmAsync[key] = JSON.stringify(obj); }
+
+    // ── PDF operations (pdf-lib / pdf.js) ────────────────────────────────
+    window.__qmPdfOp = function (op, argsJson) {
+        var key = 'pdf';
+        window.__qmAsync[key] = '';
+        (async function () {
+            try {
+                var args = JSON.parse(argsJson || '{}');
+                if (typeof PDFLib === 'undefined') throw new Error('PDF library is still loading. Try again in a moment.');
+                var PDFDocument = PDFLib.PDFDocument;
+                if (op === 'count') {
+                    var doc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    qmSetAsync(key, { ok: true, pages: doc.getPageCount() });
+                } else if (op === 'merge') {
+                    var out = await PDFDocument.create();
+                    for (var i = 0; i < args.pdfs.length; i++) {
+                        var src = await PDFDocument.load(qmB64ToBytes(args.pdfs[i]), { ignoreEncryption: true });
+                        var pages = await out.copyPages(src, src.getPageIndices());
+                        pages.forEach(function (p) { out.addPage(p); });
+                    }
+                    var bytes = await out.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(bytes), pages: out.getPageCount() });
+                } else if (op === 'extract') {
+                    var sdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var total = sdoc.getPageCount();
+                    var want = (args.pages || []).filter(function (p) { return p >= 1 && p <= total; });
+                    if (!want.length) throw new Error('No valid pages selected.');
+                    var odoc = await PDFDocument.create();
+                    var copied = await odoc.copyPages(sdoc, want.map(function (p) { return p - 1; }));
+                    copied.forEach(function (p) { odoc.addPage(p); });
+                    var obytes = await odoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(obytes), pages: odoc.getPageCount() });
+                } else if (op === 'rotate') {
+                    var rdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var angle = args.angle || 90;
+                    rdoc.getPages().forEach(function (p) {
+                        var cur = p.getRotation().angle || 0;
+                        p.setRotation(PDFLib.degrees((cur + angle) % 360));
+                    });
+                    var rbytes = await rdoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(rbytes), pages: rdoc.getPageCount() });
+                } else if (op === 'resave') {
+                    var cdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var cbytes = await cdoc.save({ useObjectStreams: true });
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(cbytes), pages: cdoc.getPageCount(), before: args.pdf.length, after: qmBytesToB64(cbytes).length });
+                } else if (op === 'imagesToPdf') {
+                    var idoc = await PDFDocument.create();
+                    for (var j = 0; j < args.images.length; j++) {
+                        var im = args.images[j];
+                        var img = (im.mime && im.mime.indexOf('png') >= 0)
+                            ? await idoc.embedPng(qmB64ToBytes(im.b64))
+                            : await idoc.embedJpg(qmB64ToBytes(im.b64));
+                        var scale = Math.min(1, 842 / Math.max(img.width, img.height));
+                        var page = idoc.addPage([img.width * scale, img.height * scale]);
+                        page.drawImage(img, { x: 0, y: 0, width: img.width * scale, height: img.height * scale });
+                    }
+                    var ibytes = await idoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(ibytes), pages: idoc.getPageCount() });
+                } else if (op === 'render') {
+                    if (typeof pdfjsLib === 'undefined') throw new Error('PDF viewer library is still loading. Try again in a moment.');
+                    var task = pdfjsLib.getDocument({ data: qmB64ToBytes(args.pdf) });
+                    var pdf = await task.promise;
+                    var n = Math.min(pdf.numPages, args.maxPages || 20);
+                    var urls = [];
+                    for (var k = 1; k <= n; k++) {
+                        var pg = await pdf.getPage(k);
+                        var vp = pg.getViewport({ scale: args.scale || 1.6 });
+                        var cv = document.createElement('canvas');
+                        cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+                        await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+                        urls.push(cv.toDataURL('image/png'));
+                    }
+                    qmSetAsync(key, { ok: true, pages: pdf.numPages, images: urls });
+                } else {
+                    throw new Error('Unknown PDF operation.');
+                }
+            } catch (e) {
+                qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+            }
+        })();
+    };
+
+    // ── Image operations (canvas) ────────────────────────────────────────
+    function qmLoadImage(dataUrl) {
+        return new Promise(function (resolve, reject) {
+            var img = new Image();
+            img.onload = function () { resolve(img); };
+            img.onerror = function () { reject(new Error('Could not read this image.')); };
+            img.src = dataUrl;
+        });
+    }
+    window.__qmImgOp = function (op, argsJson) {
+        var key = 'img';
+        window.__qmAsync[key] = '';
+        (async function () {
+            try {
+                var args = JSON.parse(argsJson || '{}');
+                var img = await qmLoadImage(args.dataUrl);
+                if (op === 'info') {
+                    qmSetAsync(key, { ok: true, w: img.naturalWidth, h: img.naturalHeight });
+                } else if (op === 'convert') {
+                    var cv = document.createElement('canvas');
+                    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                    var ctx = cv.getContext('2d');
+                    if (args.mime === 'image/jpeg') { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height); }
+                    ctx.drawImage(img, 0, 0);
+                    qmSetAsync(key, { ok: true, dataUrl: cv.toDataURL(args.mime, args.quality || 0.92) });
+                } else if (op === 'resize') {
+                    var rc = document.createElement('canvas');
+                    rc.width = args.w; rc.height = args.h;
+                    rc.getContext('2d').drawImage(img, 0, 0, args.w, args.h);
+                    qmSetAsync(key, { ok: true, dataUrl: rc.toDataURL('image/png'), w: args.w, h: args.h });
+                } else if (op === 'warp') {
+                    // Perspective warp: corners are [x0,y0, x1,y1, x2,y2, x3,y3]
+                    // (TL, TR, BR, BL) in source pixels. Output size = max edge.
+                    var c = args.corners;
+                    function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
+                    var outW = Math.max(2, Math.round(Math.max(dist(c[0], c[1], c[2], c[3]), dist(c[4], c[5], c[6], c[7]))));
+                    var outH = Math.max(2, Math.round(Math.max(dist(c[0], c[1], c[6], c[7]), dist(c[2], c[3], c[4], c[5]))));
+                    var src = document.createElement('canvas');
+                    src.width = img.naturalWidth; src.height = img.naturalHeight;
+                    var sctx = src.getContext('2d');
+                    sctx.drawImage(img, 0, 0);
+                    var sdata = sctx.getImageData(0, 0, src.width, src.height);
+                    var oc = document.createElement('canvas');
+                    oc.width = outW; oc.height = outH;
+                    var octx = oc.getContext('2d');
+                    var odata = octx.createImageData(outW, outH);
+                    // Inverse-map each output pixel through the quad (bilinear
+                    // in quad space solved via Newton iterations on the
+                    // projective transform coefficients).
+                    function solveQuad(dst) {
+                        // projective coefficients for source->unit square
+                        function coeffs(p) {
+                            var x0 = p[0], y0 = p[1], x1 = p[2], y1 = p[3], x2 = p[4], y2 = p[5], x3 = p[6], y3 = p[7];
+                            var dx1 = x1 - x2, dy1 = y1 - y2, dx2 = x3 - x2, dy2 = y3 - y2;
+                            var det = dx1 * dy2 - dx2 * dy1;
+                            var g = 0, h = 0;
+                            if (Math.abs(det) > 1e-9) {
+                                var sx = x0 - x1 + x2 - x3, sy = y0 - y1 + y2 - y3;
+                                g = (sx * dy2 - sy * dx2) / det;
+                                h = (dx1 * sy - dy1 * sx) / det;
+                            }
+                            return [x1 - x0 + g * x1, x3 - x0 + h * x3, x0,
+                                    y1 - y0 + g * y1, y3 - y0 + h * y3, y0, g, h];
+                        }
+                        return coeffs(dst);
+                    }
+                    var cf = solveQuad(c);
+                    for (var oy = 0; oy < outH; oy++) {
+                        for (var ox = 0; ox < outW; ox++) {
+                            var u = outW === 1 ? 0 : ox / (outW - 1);
+                            var v = outH === 1 ? 0 : oy / (outH - 1);
+                            var den = cf[6] * u + cf[7] * v + 1;
+                            var sx2 = (cf[0] * u + cf[1] * v + cf[2]) / den;
+                            var sy2 = (cf[3] * u + cf[4] * v + cf[5]) / den;
+                            var ix = Math.max(0, Math.min(src.width - 1, Math.round(sx2)));
+                            var iy = Math.max(0, Math.min(src.height - 1, Math.round(sy2)));
+                            var si = (iy * src.width + ix) * 4;
+                            var oi = (oy * outW + ox) * 4;
+                            var r = sdata.data[si], g2 = sdata.data[si + 1], b = sdata.data[si + 2];
+                            if (args.enhance === 'bw') {
+                                var gray = (r * 299 + g2 * 587 + b * 114) / 1000;
+                                gray = gray > 150 ? 255 : (gray < 70 ? 0 : gray);
+                                r = g2 = b = gray;
+                            } else if (args.enhance === 'enh') {
+                                r = Math.min(255, Math.max(0, (r - 128) * 1.18 + 128 + 6));
+                                g2 = Math.min(255, Math.max(0, (g2 - 128) * 1.18 + 128 + 6));
+                                b = Math.min(255, Math.max(0, (b - 128) * 1.18 + 128 + 6));
+                            }
+                            odata.data[oi] = r; odata.data[oi + 1] = g2; odata.data[oi + 2] = b; odata.data[oi + 3] = 255;
+                        }
+                    }
+                    octx.putImageData(odata, 0, 0);
+                    qmSetAsync(key, { ok: true, dataUrl: oc.toDataURL('image/png'), w: outW, h: outH });
+                } else if (op === 'process') {
+                    // Resize (optional) + re-encode at format/quality in one pass.
+                    var tw = args.w || img.naturalWidth;
+                    var th = args.h || img.naturalHeight;
+                    var pc = document.createElement('canvas');
+                    pc.width = tw; pc.height = th;
+                    var pctx = pc.getContext('2d');
+                    if (args.mime === 'image/jpeg') { pctx.fillStyle = '#ffffff'; pctx.fillRect(0, 0, tw, th); }
+                    pctx.drawImage(img, 0, 0, tw, th);
+                    qmSetAsync(key, { ok: true, dataUrl: pc.toDataURL(args.mime, args.quality || 0.8), w: tw, h: th });
+                } else if (op === 'thumb') {
+                    var maxDim = args.maxDim || 128;
+                    var tsc = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+                    var tc = document.createElement('canvas');
+                    tc.width = Math.max(1, Math.round(img.naturalWidth * tsc));
+                    tc.height = Math.max(1, Math.round(img.naturalHeight * tsc));
+                    tc.getContext('2d').drawImage(img, 0, 0, tc.width, tc.height);
+                    qmSetAsync(key, { ok: true, dataUrl: tc.toDataURL('image/png') });
+                } else if (op === 'shotEncode') {
+                    // The app's payment/proof screenshot steps, mirrored:
+                    // shrink + recompress until the base64 fits 700,000 chars.
+                    var steps = [[1200, 0.7], [1200, 0.6], [1000, 0.6], [1000, 0.5], [850, 0.5], [850, 0.4], [700, 0.4], [700, 0.3]];
+                    var result = '';
+                    for (var si2 = 0; si2 < steps.length; si2++) {
+                        var maxDim = steps[si2][0], q = steps[si2][1];
+                        var sc = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+                        var cc = document.createElement('canvas');
+                        cc.width = Math.max(1, Math.round(img.naturalWidth * sc));
+                        cc.height = Math.max(1, Math.round(img.naturalHeight * sc));
+                        var cx = cc.getContext('2d');
+                        cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cc.width, cc.height);
+                        cx.drawImage(img, 0, 0, cc.width, cc.height);
+                        var durl = cc.toDataURL('image/jpeg', q);
+                        result = durl.substring(durl.indexOf(',') + 1);
+                        if (result.length <= 700000) break;
+                    }
+                    qmSetAsync(key, { ok: true, b64: result, len: result.length });
+                } else {
+                    throw new Error('Unknown image operation.');
+                }
+            } catch (e) {
+                qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+            }
+        })();
+    };
+
+    // ── PDF compression (Pi7-style: re-encode embedded images only) ──────
+    // Text, fonts, vector graphics and page layout are NOT touched: only
+    // image XObject streams are decoded, re-encoded as smaller JPEGs and
+    // swapped back into the same document, which is then re-saved with
+    // object streams. Images with transparency masks (SMask) or non-8-bit
+    // data are skipped and counted, never silently mangled.
+    window.__qmCompressProgress = '';
+    window.__qmPdfCompress = function (b64, targetBytes) {
+        var key = 'pdfzip';
+        window.__qmAsync[key] = '';
+        window.__qmCompressProgress = 'Reading PDF…';
+        (async function () {
+            try {
+                if (typeof PDFLib === 'undefined') throw new Error('PDF library is still loading. Try again in a moment.');
+                var srcBytes = qmB64ToBytes(b64);
+                var before = srcBytes.length;
+                // Fail fast on corrupt / encrypted input.
+                var probe = await PDFLib.PDFDocument.load(srcBytes.slice(), { ignoreEncryption: false });
+                if (probe.isEncrypted) throw new Error('This PDF is password-protected and cannot be compressed.');
+
+                async function attempt(quality, scale) {
+                    var doc = await PDFLib.PDFDocument.load(srcBytes.slice(), { ignoreEncryption: true });
+                    var ctx = doc.context;
+                    var replaced = 0, skipped = 0, seen = {};
+                    for (var pi = 0; pi < doc.getPageCount(); pi++) {
+                        var page = doc.getPage(pi);
+                        var resources = page.node.Resources();
+                        if (!resources) continue;
+                        var xobjects = resources.lookup(PDFLib.PDFName.of('XObject'), PDFLib.PDFDict);
+                        if (!xobjects) continue;
+                        var keys = xobjects.keys();
+                        for (var ki = 0; ki < keys.length; ki++) {
+                            var ref = xobjects.get(keys[ki]);
+                            if (!ref || seen[ref.tag]) continue;
+                            seen[ref.tag] = true;
+                            var obj = ctx.lookup(ref);
+                            if (!obj || !obj.dict) continue;
+                            var dict = obj.dict;
+                            function dname(n) { var v = dict.get(PDFLib.PDFName.of(n)); return v ? v.decodeText ? v.decodeText() : ('' + v) : ''; }
+                            function dnum(n) { var v = dict.get(PDFLib.PDFName.of(n)); return v && v.asNumber ? v.asNumber() : 0; }
+                            if (('' + dict.get(PDFLib.PDFName.of('Subtype'))) !== '/Image') continue;
+                            var w0 = dnum('Width'), h0 = dnum('Height');
+                            if (!w0 || !h0) continue;
+                            if (dict.get(PDFLib.PDFName.of('SMask'))) { skipped++; continue; }
+                            if (dnum('BitsPerComponent') && dnum('BitsPerComponent') !== 8) { skipped++; continue; }
+                            var parms = dict.get(PDFLib.PDFName.of('DecodeParms'));
+                            if (parms && parms.get && parms.get(PDFLib.PDFName.of('Predictor'))) {
+                                var pred = parms.get(PDFLib.PDFName.of('Predictor'));
+                                if (pred && pred.asNumber && pred.asNumber() > 1) { skipped++; continue; }
+                            }
+                            // Decode the source image pixels:
+                            // DCTDecode streams are plain JPEG files; FlateDecode
+                            // 8-bit DeviceRGB/Gray streams are zlib'd raw pixels.
+                            var filter = '' + dict.get(PDFLib.PDFName.of('Filter'));
+                            var raw = obj.getContents ? obj.getContents() : null;
+                            if (!raw) { skipped++; continue; }
+                            var img = null;
+                            try {
+                                if (filter.indexOf('DCTDecode') >= 0) {
+                                    var blob = new Blob([raw], { type: 'image/jpeg' });
+                                    img = await createImageBitmap(blob);
+                                } else if (filter.indexOf('FlateDecode') >= 0 || filter === '' || filter === 'undefined') {
+                                    var pixels = raw;
+                                    if (filter.indexOf('FlateDecode') >= 0) {
+                                        var inflated = await new Response(
+                                            new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate'))
+                                        ).arrayBuffer();
+                                        pixels = new Uint8Array(inflated);
+                                    }
+                                    var cs = '' + dict.get(PDFLib.PDFName.of('ColorSpace'));
+                                    var comps = cs.indexOf('DeviceGray') >= 0 ? 1 : 3;
+                                    if (pixels.length < w0 * h0 * comps) { skipped++; continue; }
+                                    var idata = new ImageData(w0, h0);
+                                    for (var px = 0, n = w0 * h0; px < n; px++) {
+                                        if (comps === 1) {
+                                            idata.data[px * 4] = idata.data[px * 4 + 1] = idata.data[px * 4 + 2] = pixels[px];
+                                        } else {
+                                            idata.data[px * 4] = pixels[px * 3];
+                                            idata.data[px * 4 + 1] = pixels[px * 3 + 1];
+                                            idata.data[px * 4 + 2] = pixels[px * 3 + 2];
+                                        }
+                                        idata.data[px * 4 + 3] = 255;
+                                    }
+                                    img = await createImageBitmap(idata);
+                                } else { skipped++; continue; }
+                            } catch (de) { skipped++; continue; }
+                            var nw = Math.max(1, Math.round(w0 * scale));
+                            var nh = Math.max(1, Math.round(h0 * scale));
+                            var cv = document.createElement('canvas');
+                            cv.width = nw; cv.height = nh;
+                            var cx = cv.getContext('2d');
+                            cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, nw, nh);
+                            cx.drawImage(img, 0, 0, nw, nh);
+                            var outBlob = await new Promise(function (res) { cv.toBlob(res, 'image/jpeg', quality); });
+                            if (!outBlob) { skipped++; continue; }
+                            var outBytes = new Uint8Array(await outBlob.arrayBuffer());
+                            if (outBytes.length >= raw.length) { skipped++; continue; } // never grow an image
+                            dict.set(PDFLib.PDFName.of('Filter'), PDFLib.PDFName.of('DCTDecode'));
+                            dict.set(PDFLib.PDFName.of('Width'), PDFLib.PDFNumber.of(nw));
+                            dict.set(PDFLib.PDFName.of('Height'), PDFLib.PDFNumber.of(nh));
+                            dict.set(PDFLib.PDFName.of('ColorSpace'), PDFLib.PDFName.of('DeviceRGB'));
+                            dict.set(PDFLib.PDFName.of('BitsPerComponent'), PDFLib.PDFNumber.of(8));
+                            dict.delete(PDFLib.PDFName.of('DecodeParms'));
+                            dict.delete(PDFLib.PDFName.of('SMask'));
+                            var stream = PDFLib.PDFRawStream.of(dict, outBytes);
+                            ctx.assign(ref, stream);
+                            replaced++;
+                            window.__qmCompressProgress = 'Compressing images… (' + replaced + ' done)';
+                        }
+                    }
+                    var saved = await doc.save({ useObjectStreams: true });
+                    return { bytes: saved, replaced: replaced, skipped: skipped };
+                }
+
+                window.__qmCompressProgress = 'Rebuilding pages…';
+                var steps = [[0.8, 1], [0.65, 0.85], [0.5, 0.7], [0.38, 0.55], [0.3, 0.42]];
+                var best = null;
+                for (var si = 0; si < steps.length; si++) {
+                    var r = await attempt(steps[si][0], steps[si][1]);
+                    if (best === null || r.bytes.length < best.bytes.length) best = r;
+                    if (targetBytes > 0 && best.bytes.length <= targetBytes) break;
+                    if (r.replaced === 0) break; // no compressible images at all
+                }
+                // Always compare against a plain re-save (structure-only win).
+                var plainDoc = await PDFLib.PDFDocument.load(srcBytes.slice(), { ignoreEncryption: true });
+                var plainBytes = await plainDoc.save({ useObjectStreams: true });
+                if (best === null || plainBytes.length < best.bytes.length) {
+                    best = { bytes: plainBytes, replaced: 0, skipped: best ? best.skipped : 0 };
+                }
+                var noGain = best.bytes.length >= before;
+                qmSetAsync(key, {
+                    ok: true,
+                    b64: noGain ? b64 : qmBytesToB64(best.bytes),
+                    before: before,
+                    after: noGain ? before : best.bytes.length,
+                    imagesReplaced: noGain ? 0 : best.replaced,
+                    imagesSkipped: best.skipped,
+                    noGain: noGain,
+                    targetReached: targetBytes > 0 ? (noGain ? false : best.bytes.length <= targetBytes) : null
+                });
+            } catch (e) {
+                var msg = (e && e.message) ? e.message : ('' + e);
+                if (/encrypt|password/i.test(msg)) msg = 'This PDF is password-protected and cannot be compressed.';
+                else if (/invalid|parse|structure/i.test(msg)) msg = 'This PDF could not be read — it may be corrupt.';
+                qmSetAsync(key, { ok: false, error: msg });
+            }
+        })();
+    };
+
+    // ── ZIP download (stored entries; images are already compressed) ────
+    window.__qmZipDownload = function (zipName, entriesJson) {
+        function crc32(bytes) {
+            var table = crc32.t;
+            if (!table) {
+                table = crc32.t = [];
+                for (var n = 0; n < 256; n++) {
+                    var c = n;
+                    for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                    table[n] = c >>> 0;
+                }
+            }
+            var crc = 0xFFFFFFFF;
+            for (var i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+            return (crc ^ 0xFFFFFFFF) >>> 0;
+        }
+        var entries = JSON.parse(entriesJson || '[]');
+        var chunks = [], central = [], offset = 0;
+        function u16(v) { return [v & 0xFF, (v >>> 8) & 0xFF]; }
+        function u32(v) { return [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF]; }
+        function push(arr) { var b = new Uint8Array(arr); chunks.push(b); offset += b.length; }
+        entries.forEach(function (en) {
+            var nameBytes = new TextEncoder().encode(en.name);
+            var data = qmB64ToBytes(en.b64);
+            var crc = crc32(data);
+            var local = [].concat(
+                u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0x21),
+                u32(crc), u32(data.length), u32(data.length),
+                u16(nameBytes.length), u16(0), Array.from(nameBytes)
+            );
+            var localOffset = offset;
+            push(local); push(data);
+            central.push([].concat(
+                u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0x21),
+                u32(crc), u32(data.length), u32(data.length),
+                u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(localOffset),
+                Array.from(nameBytes)
+            ));
+        });
+        var centralSize = 0;
+        central.forEach(function (c) { centralSize += c.length; });
+        var centralOffset = offset;
+        central.forEach(function (c) { push(c); });
+        push([].concat(
+            u32(0x06054b50), u16(0), u16(0), u16(entries.length), u16(entries.length),
+            u32(centralSize), u32(centralOffset), u16(0)
+        ));
+        var blob = new Blob(chunks, { type: 'application/zip' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = zipName;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+    };
+
+    // ── QR decode from an image (jsQR, lazy) ─────────────────────────────
+    window.__qmQrDecode = function (dataUrl) {
+        var key = 'qrscan';
+        window.__qmAsync[key] = '';
+        function run() {
+            qmLoadImage(dataUrl).then(function (img) {
+                var cv = document.createElement('canvas');
+                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                var ctx = cv.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                var data = ctx.getImageData(0, 0, cv.width, cv.height);
+                var code = jsQR(data.data, cv.width, cv.height);
+                if (code && code.data) qmSetAsync(key, { ok: true, text: code.data });
+                else qmSetAsync(key, { ok: false, error: 'No QR code found in this image.' });
+            }).catch(function (e) {
+                qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+            });
+        }
+        if (typeof jsQR === 'function') { run(); return; }
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+        s.onload = run;
+        s.onerror = function () { qmSetAsync(key, { ok: false, error: 'Could not load the QR scanner. Check your connection.' }); };
+        document.head.appendChild(s);
+    };
+
+    // ── Background removal (lazy, model downloads on first use) ──────────
+    window.__qmBgProgress = '';
+    window.__qmBgRemove = function (dataUrl) {
+        var key = 'bg';
+        window.__qmAsync[key] = '';
+        window.__qmBgProgress = 'Starting…';
+        fetch(dataUrl).then(function (r) { return r.blob(); }).then(function (blob) {
+            window.__qmBgProgress = 'Loading the background-removal tool (first use downloads a model)…';
+            return import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm').then(function (mod) {
+                var fn = mod.removeBackground || (mod.default && mod.default.removeBackground) || mod.default;
+                if (typeof fn !== 'function') throw new Error('Background removal tool failed to load.');
+                return fn(blob, {
+                    progress: function (k, cur, tot) {
+                        if (tot > 0) window.__qmBgProgress = 'Downloading model… ' + Math.round(100 * cur / tot) + '%';
+                    }
+                });
+            });
+        }).then(function (outBlob) {
+            var r = new FileReader();
+            r.onload = function () { qmSetAsync(key, { ok: true, dataUrl: String(r.result || '') }); };
+            r.onerror = function () { qmSetAsync(key, { ok: false, error: 'Could not read the result.' }); };
+            r.readAsDataURL(outBlob);
+        }).catch(function (e) {
+            qmSetAsync(key, { ok: false, error: (e && e.message) ? e.message : ('' + e) });
+        });
+    };
+    </script>
     <script type="application/javascript" src="qrmaster.js"></script>
 </head>
 <body>
+<div id="qm-drop-overlay"><div class="qm-drop-box">Drop files here to add them</div></div>
 </body>
 </html>

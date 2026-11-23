@@ -80,6 +80,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.math.floor
 import kotlinx.browser.window
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.launch
 import org.jetbrains.skia.Image as SkiaImage
 import qrmaster.web.data.FirebaseApi
@@ -177,6 +178,25 @@ fun ScreenContent(state: AppState) {
         Screen.Premium -> PremiumScreen(state)
         Screen.Login -> LoginScreen(state)
         Screen.Placeholder -> PlaceholderScreen(state, state.placeholderTitle)
+        Screen.Barcode -> BarcodeScreen(state)
+        Screen.QrScan -> QrScanScreen(state)
+        Screen.ImageTools -> ImageToolsScreen(state)
+        Screen.Scanner -> ScannerScreen(state)
+        Screen.RemoveBg -> RemoveBgScreen(state)
+        Screen.ResizeImage -> ResizeImageScreen(state)
+        Screen.AgeCalc -> AgeCalcScreen(state)
+        Screen.BmiCalc -> BmiScreen(state)
+        Screen.UnitConvert -> UnitScreen(state)
+        Screen.CurrencyConvert -> CurrencyScreen(state)
+        Screen.PercentCalc -> PercentScreen(state)
+        Screen.CompressPdf -> CompressPdfScreen(state)
+        Screen.CompressImage -> CompressImageScreen(state)
+        Screen.Bonus -> BonusScreen(state)
+        Screen.Invite -> InviteScreen(state)
+        Screen.History -> HistoryScreen(state)
+        Screen.Notifications -> NotificationsScreen(state)
+        Screen.Support -> SupportScreen(state)
+        Screen.About -> AboutScreen(state)
     }
 }
 
@@ -274,18 +294,18 @@ data class ToolCardDef(
 fun homeTools(): List<ToolCardDef> = listOf(
     ToolCardDef("QR Generator", "QR Tools", "Productivity", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
     ToolCardDef("PDF Converter", "PDF Tools", "PDF", IconKind.Pdf, Color(0xFFE11D48)) { it.navigate(Screen.PdfConverter) },
-    ToolCardDef("Image Tools", "Edit & Convert", "Productivity", IconKind.Image, Color(0xFF16A34A)) { it.openPlaceholder("Image Tools") },
-    ToolCardDef("Document Scanner", "Scan & PDF", "Productivity", IconKind.Scan, Color(0xFF2563EB)) { it.openPlaceholder("Document Scanner") },
-    ToolCardDef("Image to PDF", "PDF Tools", "PDF", IconKind.FileText, Color(0xFF9333EA)) { it.navigate(Screen.PdfConverter) },
-    ToolCardDef("Merge PDF", "PDF Tools", "PDF", IconKind.Merge, Color(0xFFDC2626)) { it.navigate(Screen.PdfConverter) },
-    ToolCardDef("Compress PDF", "PDF Tools", "PDF", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.PdfConverter) },
-    ToolCardDef("Remove BG", "Photo Tools", "Productivity", IconKind.Star, Color(0xFF7C3AED)) { it.openPlaceholder("Remove BG") },
-    ToolCardDef("Resize Image", "Photo Tools", "Productivity", IconKind.Edit, Color(0xFF0D9488)) { it.openPlaceholder("Resize Image") },
-    ToolCardDef("Age Calculator", "Calculators", "Calculators", IconKind.Calendar, Color(0xFFDB2777)) { it.openPlaceholder("Age Calculator") },
-    ToolCardDef("BMI Calculator", "Calculators & Converters", "Calculators", IconKind.Calc, Color(0xFF0284C7)) { it.openPlaceholder("BMI Calculator") },
-    ToolCardDef("Unit Converter", "Converters", "Calculators", IconKind.Swap, Color(0xFF65A30D)) { it.openPlaceholder("Unit Converter") },
-    ToolCardDef("Currency Converter", "Converters", "Calculators", IconKind.Wallet, Color(0xFFCA8A04)) { it.openPlaceholder("Currency Converter") },
-    ToolCardDef("Percentage Calculator", "Calculator", "Calculators", IconKind.Percent, Color(0xFFC026D3)) { it.openPlaceholder("Percentage Calculator") }
+    ToolCardDef("Image Tools", "Edit & Convert", "Productivity", IconKind.Image, Color(0xFF16A34A)) { it.navigate(Screen.ImageTools) },
+    ToolCardDef("Document Scanner", "Scan & PDF", "Productivity", IconKind.Scan, Color(0xFF2563EB)) { it.navigate(Screen.Scanner) },
+    ToolCardDef("Image to PDF", "PDF Tools", "PDF", IconKind.FileText, Color(0xFF9333EA)) { it.openPdf("Images to PDF") },
+    ToolCardDef("Merge PDF", "PDF Tools", "PDF", IconKind.Merge, Color(0xFFDC2626)) { it.openPdf("Merge PDF") },
+    ToolCardDef("Compress PDF", "PDF Tools", "PDF", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
+    ToolCardDef("Remove BG", "Photo Tools", "Productivity", IconKind.Star, Color(0xFF7C3AED)) { it.navigate(Screen.RemoveBg) },
+    ToolCardDef("Resize Image", "Photo Tools", "Productivity", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },
+    ToolCardDef("Age Calculator", "Calculators", "Calculators", IconKind.Calendar, Color(0xFFDB2777)) { it.navigate(Screen.AgeCalc) },
+    ToolCardDef("BMI Calculator", "Calculators & Converters", "Calculators", IconKind.Calc, Color(0xFF0284C7)) { it.navigate(Screen.BmiCalc) },
+    ToolCardDef("Unit Converter", "Converters", "Calculators", IconKind.Swap, Color(0xFF65A30D)) { it.navigate(Screen.UnitConvert) },
+    ToolCardDef("Currency Converter", "Converters", "Calculators", IconKind.Wallet, Color(0xFFCA8A04)) { it.navigate(Screen.CurrencyConvert) },
+    ToolCardDef("Percentage Calculator", "Calculator", "Calculators", IconKind.Percent, Color(0xFFC026D3)) { it.navigate(Screen.PercentCalc) }
 )
 
 val HeroQrPalette = listOf(
@@ -384,7 +404,7 @@ fun HomeToolCard(t: ToolCardDef, onClick: () -> Unit) {
 fun HeroBanner(state: AppState) {
     var heroQuery by remember { mutableStateOf("") }
     val heroQr = remember {
-        try { QrCode.encodeText("https://ayansikligar098-commits.github.io/qr-master-web/", QrEcc.MEDIUM) }
+        try { QrCode.encodeText("https://qrmaster-4ai.pages.dev/", QrEcc.MEDIUM) }
         catch (e: Exception) { null }
     }
     BoxWithConstraints(
@@ -516,7 +536,7 @@ fun AllToolsScreen(state: AppState) {
 
     val qrTools = listOf(
         ToolCardDef("QR Generator", "", "QR Tools", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
-        ToolCardDef("QR Scanner", "", "QR Tools", IconKind.Scan, Color(0xFF0891B2)) { it.openPlaceholder("QR Scanner") },
+        ToolCardDef("QR Scanner", "", "QR Tools", IconKind.Scan, Color(0xFF0891B2)) { it.navigate(Screen.QrScan) },
         ToolCardDef("Wi-Fi QR", "", "QR Tools", IconKind.Zap, Color(0xFF2563EB)) { it.openQr(QrPreset("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;")) },
         ToolCardDef("Website QR", "", "QR Tools", IconKind.Grid, Color(0xFF059669)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
         ToolCardDef("WhatsApp QR", "", "QR Tools", IconKind.Play, Color(0xFF16A34A)) { it.openQr(QrPreset("WhatsApp", "WhatsApp Number", "https://wa.me/")) },
@@ -524,32 +544,34 @@ fun AllToolsScreen(state: AppState) {
         ToolCardDef("Telegram QR", "", "QR Tools", IconKind.Share, Color(0xFF0284C7)) { it.openQr(QrPreset("Telegram", "Telegram Username", "https://t.me/")) },
         ToolCardDef("UPI QR", "", "QR Tools", IconKind.Wallet, Color(0xFF7C3AED)) { it.openQr(QrPreset("UPI Payment", "UPI ID", "upi://pay?pa=&pn=")) },
         ToolCardDef("Contact QR", "", "QR Tools", IconKind.Users, Color(0xFFEA580C)) { it.openQr(QrPreset("Contact Card", "Contact Details", "BEGIN:VCARD\nVERSION:3.0\nFN:\nTEL:\nEND:VCARD")) },
-        ToolCardDef("Barcode Generator", "", "QR Tools", IconKind.Barcode, Color(0xFF334155)) { it.openPlaceholder("Barcode Generator") }
+        ToolCardDef("Barcode Generator", "", "QR Tools", IconKind.Barcode, Color(0xFF334155)) { it.navigate(Screen.Barcode) }
     )
     val pdfTools = listOf(
         ToolCardDef("PDF Converter", "", "PDF Tools", IconKind.Pdf, Color(0xFFE11D48)) { it.navigate(Screen.PdfConverter) },
-        ToolCardDef("Merge PDF", "", "PDF Tools", IconKind.Merge, Color(0xFFDC2626)) { it.navigate(Screen.PdfConverter) },
-        ToolCardDef("Split PDF", "", "PDF Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.navigate(Screen.PdfConverter) },
-        ToolCardDef("Compress PDF", "", "PDF Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.PdfConverter) },
-        ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2)) { it.navigate(Screen.PdfConverter) }
+        ToolCardDef("Merge PDF", "", "PDF Tools", IconKind.Merge, Color(0xFFDC2626)) { it.openPdf("Merge PDF") },
+        ToolCardDef("Split PDF", "", "PDF Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.openPdf("Split PDF") },
+        ToolCardDef("Compress PDF", "", "PDF Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
+        ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2)) { it.openPdf("Rotate PDF") }
     )
     val imageTools = listOf(
-        ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A)) { it.openPlaceholder("Image Tools") },
-        ToolCardDef("Remove BG", "", "Image Tools", IconKind.Star, Color(0xFF9333EA)) { it.openPlaceholder("Remove BG") },
-        ToolCardDef("Resize Image", "", "Image Tools", IconKind.Edit, Color(0xFF0D9488)) { it.openPlaceholder("Resize Image") },
-        ToolCardDef("Image to PDF", "", "Image Tools", IconKind.FileText, Color(0xFFDB2777)) { it.navigate(Screen.PdfConverter) }
+        ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A)) { it.navigate(Screen.ImageTools) },
+        ToolCardDef("Document Scanner", "", "Image Tools", IconKind.Scan, Color(0xFF2563EB)) { it.navigate(Screen.Scanner) },
+        ToolCardDef("Compress Image", "", "Image Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressImage) },
+        ToolCardDef("Remove BG", "", "Image Tools", IconKind.Star, Color(0xFF9333EA)) { it.navigate(Screen.RemoveBg) },
+        ToolCardDef("Resize Image", "", "Image Tools", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },
+        ToolCardDef("Image to PDF", "", "Image Tools", IconKind.FileText, Color(0xFFDB2777)) { it.openPdf("Images to PDF") }
     )
     val converters = listOf(
-        ToolCardDef("Age Calculator", "", "Converters", IconKind.Calendar, Color(0xFFDB2777)) { it.openPlaceholder("Age Calculator") },
-        ToolCardDef("BMI Calculator", "", "Converters", IconKind.Calc, Color(0xFF0284C7)) { it.openPlaceholder("BMI Calculator") },
-        ToolCardDef("Unit Converter", "", "Converters", IconKind.Swap, Color(0xFF65A30D)) { it.openPlaceholder("Unit Converter") },
-        ToolCardDef("Currency Converter", "", "Converters", IconKind.Wallet, Color(0xFFCA8A04)) { it.openPlaceholder("Currency Converter") },
-        ToolCardDef("Percentage Calculator", "", "Converters", IconKind.Percent, Color(0xFFC026D3)) { it.openPlaceholder("Percentage Calculator") }
+        ToolCardDef("Age Calculator", "", "Converters", IconKind.Calendar, Color(0xFFDB2777)) { it.navigate(Screen.AgeCalc) },
+        ToolCardDef("BMI Calculator", "", "Converters", IconKind.Calc, Color(0xFF0284C7)) { it.navigate(Screen.BmiCalc) },
+        ToolCardDef("Unit Converter", "", "Converters", IconKind.Swap, Color(0xFF65A30D)) { it.navigate(Screen.UnitConvert) },
+        ToolCardDef("Currency Converter", "", "Converters", IconKind.Wallet, Color(0xFFCA8A04)) { it.navigate(Screen.CurrencyConvert) },
+        ToolCardDef("Percentage Calculator", "", "Converters", IconKind.Percent, Color(0xFFC026D3)) { it.navigate(Screen.PercentCalc) }
     )
     val earnTools = listOf(
         ToolCardDef("Tasks & Earn", "", "More", IconKind.Task, Color(0xFFD97706)) { it.navigate(Screen.Tasks) },
         ToolCardDef("Spin & Earn", "", "More", IconKind.Spin, Color(0xFF7C3AED)) { it.navigate(Screen.Spin) },
-        ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777)) { it.openPlaceholder("Bonus Code") }
+        ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777)) { it.navigate(Screen.Bonus) }
     )
     val sections = listOf(
         SectionDef("QR & Barcode Tools", "QR Tools", qrTools),
@@ -892,6 +914,7 @@ fun QrGeneratorScreen(state: AppState) {
                                                     )
                                                     downloadPngBase64("qr-master-qr.png", Base64.encode(png))
                                                     state.logActivity("QR downloaded — ${content.take(24)}")
+                                                    recordHistory("QR Generator", "QR code downloaded", content.take(48))
                                                     state.toast("QR downloaded")
                                                 } catch (e: Exception) {
                                                     state.toast("Download failed — please try again")
@@ -959,129 +982,120 @@ fun QrGeneratorScreen(state: AppState) {
 fun SkiaImage.toComposeImageBitmap(): ImageBitmap =
     org.jetbrains.skia.Bitmap.makeFromImage(this).asComposeImageBitmap()
 
-/* ---------------- 4) PDF Converter (reference workspace) ---------------- */
+/* ---------------- 4) PDF Converter (workspace — real pdf-lib tools) ---------------- */
 
+private suspend fun ensurePdfLibsReady(): String? {
+    loadPdfLibs()
+    var tries = 0
+    var status = pdfLibStatus()
+    while (status != "ready" && tries < 120) {
+        if (status.startsWith("error")) return status.removePrefix("error:")
+        delay(300)
+        tries++
+        status = pdfLibStatus()
+    }
+    return if (status == "ready") null else "The PDF engine is still loading. Try again in a moment."
+}
+
+private fun parsePageRange(input: String, total: Int): List<Int> {
+    val out = sortedSetOf<Int>()
+    for (part in input.split(",")) {
+        val p = part.trim()
+        if (p.isEmpty()) continue
+        if (p.contains("-")) {
+            val a = p.substringBefore("-").trim().toIntOrNull() ?: continue
+            val b = p.substringAfter("-").trim().toIntOrNull() ?: continue
+            for (n in minOf(a, b)..maxOf(a, b)) if (n in 1..total) out.add(n)
+        } else {
+            val n = p.toIntOrNull() ?: continue
+            if (n in 1..total) out.add(n)
+        }
+    }
+    return out.toList()
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun PdfConverterScreen(state: AppState) {
     val scope = rememberCoroutineScope()
-    var fileName by remember { mutableStateOf("") }
-    var fileSize by remember { mutableStateOf(0L) }
-    var selectedTool by remember { mutableStateOf("PDF Converter") }
-    var urlMode by remember { mutableStateOf(false) }
-    var urlText by remember { mutableStateOf("") }
+    var selectedTool by remember { mutableStateOf(state.pdfTool) }
+    var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
+    var pageRange by remember { mutableStateOf("") }
+    var angle by remember { mutableStateOf(90) }
+    var busy by remember { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf<String?>(null) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var resultB64 by remember { mutableStateOf<String?>(null) }
+    var resultName by remember { mutableStateOf("output.pdf") }
+    var pageImages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var pageBitmaps by remember { mutableStateOf<Map<Int, ImageBitmap>>(emptyMap()) }
+    var pageCount by remember { mutableStateOf<Int?>(null) }
 
-    fun pick() {
+    LaunchedEffect(state.pdfTool) {
+        if (state.pdfTool == "Compress PDF") {
+            state.navigate(Screen.CompressPdf)
+        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF")) {
+            selectedTool = state.pdfTool
+        } else {
+            selectedTool = "Merge PDF"
+        }
+    }
+    LaunchedEffect(selectedTool) {
+        files = emptyList()
+        resultB64 = null; pageImages = emptyList(); pageCount = null
+        statusText = null; errorText = null
+    }
+
+    val toolSpec = if (selectedTool == "Images to PDF") IMAGE_SPEC else PDF_SPEC
+    val multi = selectedTool == "Merge PDF" || selectedTool == "Images to PDF"
+
+    fun runOp(op: String, args: String, onOk: (JsonObject) -> Unit) {
+        busy = true; errorText = null; statusText = null
         scope.launch {
-            val id = pickFile("application/pdf,.doc,.docx,.jpg,.jpeg,.png", false)
-            var tries = 0
-            var result = ""
-            while (tries < 300) {
-                delay(200)
-                result = pollPickedFile(id)
-                if (result.isNotEmpty()) break
-                tries++
-            }
-            if (result.isNotEmpty() && result != "CANCELLED") {
-                val parts = result.split("|", limit = 3)
-                fileName = parts.getOrNull(0) ?: ""
-                fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
-                state.toast("File selected: $fileName")
+            val libErr = ensurePdfLibsReady()
+            if (libErr != null) { busy = false; errorText = libErr; return@launch }
+            pdfOp(op, args)
+            val res = awaitAsync("pdf", 300_000)
+            busy = false
+            when {
+                res == null -> errorText = "Processing timed out. Try a smaller file."
+                res.asyncOk() -> onOk(res)
+                else -> errorText = res.asyncError()
             }
         }
     }
 
-    val pdfTools = listOf(
-        Triple("Merge PDF", IconKind.Merge, Color(0xFFDC2626)),
-        Triple("Split PDF", IconKind.FileText, Color(0xFF7C3AED)),
-        Triple("Compress PDF", IconKind.Compress, Color(0xFFEA580C)),
-        Triple("PDF to Images", IconKind.Image, Color(0xFF2563EB)),
-        Triple("Images to PDF", IconKind.Pdf, Color(0xFFDB2777))
-    )
+    fun loadFirstPdfCount() {
+        val f = files.firstOrNull() ?: return
+        scope.launch {
+            if (ensurePdfLibsReady() != null) return@launch
+            val b64 = loadFileBase64(f.id) ?: return@launch
+            pdfOp("count", "{\"pdf\":\"$b64\"}")
+            val res = awaitAsync("pdf", 60_000)
+            if (res != null && res.asyncOk()) pageCount = res.asyncStr("pages").toIntOrNull()
+        }
+    }
+    LaunchedEffect(files.firstOrNull()?.id, selectedTool) {
+        pageCount = null
+        if (selectedTool != "Images to PDF" && files.isNotEmpty()) loadFirstPdfCount()
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { Spacer(Modifier.height(2.dp)) }
-        item { PageHeader(IconKind.Pdf, "PDF Converter", "Convert, edit and manage your PDF files easily.") }
-        item {
-            // Upload dropzone (dashed border, as in reference)
-            Box(
-                Modifier.fillMaxWidth().height(168.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xFFFBFAFF))
-                    .drawBehind {
-                        drawRoundRect(
-                            color = Color(0xFFB9A8F5),
-                            style = Stroke(width = 1.6f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 7f))),
-                            cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx())
-                        )
-                    }
-                    .clickable { pick() },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    QrIcon(IconKind.Pdf, PurplePrimary, size = 40.dp)
-                    Spacer(Modifier.height(10.dp))
-                    if (fileName.isBlank()) {
-                        Text("Click to upload or drag and drop", fontWeight = FontWeight.SemiBold, fontSize = 14.5.sp, color = NavyText)
-                        Spacer(Modifier.height(4.dp))
-                        Text("Supports: PDF, DOC, DOCX, JPG, PNG (Max 50MB)", fontSize = 12.sp, color = MutedText)
-                    } else {
-                        Text(fileName, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = NavyText, maxLines = 1)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Size: ${if (fileSize > 1024 * 1024) "${(fileSize / 1024 / 1024)} MB" else "${(fileSize / 1024)} KB"}  •  Tool: $selectedTool",
-                            fontSize = 12.sp, color = MutedText
-                        )
-                        TextButton(onClick = { fileName = ""; fileSize = 0 }) { Text("Remove file", fontSize = 12.sp) }
-                    }
-                }
-            }
-        }
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Text("Select from:", fontSize = 13.sp, color = MutedText)
-                Spacer(Modifier.height(9.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = { urlMode = !urlMode }, shape = RoundedCornerShape(10.dp)) {
-                        QrIcon(IconKind.Share, PurplePrimary, size = 15.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text("From URL", fontSize = 12.5.sp)
-                    }
-                    OutlinedButton(onClick = { pick() }, shape = RoundedCornerShape(10.dp)) {
-                        QrIcon(IconKind.Download, PurplePrimary, size = 15.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text("From Device", fontSize = 12.5.sp)
-                    }
-                    OutlinedButton(
-                        onClick = { state.toast("Cloud import is not available yet") },
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        QrIcon(IconKind.FileText, PurplePrimary, size = 15.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text("From Cloud", fontSize = 12.5.sp)
-                    }
-                }
-                if (urlMode) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = urlText,
-                        onValueChange = { urlText = it },
-                        placeholder = { Text("Paste a file URL", fontSize = 13.sp) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth()
-                    )
-                }
-            }
-        }
-        item {
-            Text("Popular PDF Tools", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = NavyText)
-        }
+        item { PageHeader(IconKind.Pdf, "PDF Converter", "Convert, edit and manage your PDF files — everything runs in your browser.") }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                pdfTools.forEach { (name, icon, color) ->
+                listOf(
+                    Triple("Merge PDF", IconKind.Merge, Color(0xFFDC2626)),
+                    Triple("Split PDF", IconKind.FileText, Color(0xFF7C3AED)),
+                    Triple("Compress PDF", IconKind.Compress, Color(0xFFEA580C)),
+                    Triple("Rotate PDF", IconKind.Swap, Color(0xFF0891B2)),
+                    Triple("PDF to Images", IconKind.Image, Color(0xFF2563EB)),
+                    Triple("Images to PDF", IconKind.Pdf, Color(0xFFDB2777))
+                ).forEach { (name, icon, color) ->
                     Column(
                         Modifier.width(118.dp).height(96.dp)
                             .clip(RoundedCornerShape(13.dp))
@@ -1091,7 +1105,10 @@ fun PdfConverterScreen(state: AppState) {
                                 if (selectedTool == name) PurplePrimary else Color.Transparent,
                                 RoundedCornerShape(13.dp)
                             )
-                            .clickable { selectedTool = name }
+                            .clickable {
+                                if (name == "Compress PDF") state.navigate(Screen.CompressPdf)
+                                else selectedTool = name
+                            }
                             .padding(9.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
@@ -1099,6 +1116,183 @@ fun PdfConverterScreen(state: AppState) {
                         QrIcon(icon, color, size = 24.dp)
                         Spacer(Modifier.height(7.dp))
                         Text(name, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = NavyText, textAlign = TextAlign.Center, maxLines = 1)
+                    }
+                }
+            }
+        }
+        item {
+            WhiteCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                    FileZone(
+                        state, files, toolSpec,
+                        if (selectedTool == "Images to PDF") "PNG or JPG images (up to 10)"
+                        else "PDF files (max 25 MB each)"
+                    ) { newFiles -> files = if (multi) newFiles else newFiles.take(1) }
+                    if (pageCount != null && selectedTool != "Images to PDF") {
+                        Text("This PDF has $pageCount page(s).", fontSize = 12.5.sp, color = MutedText)
+                    }
+                    when (selectedTool) {
+                        "Split PDF" -> {
+                            OutlinedTextField(
+                                value = pageRange,
+                                onValueChange = { pageRange = it },
+                                label = { Text("Pages to extract (e.g. 1-3, 5, 8)") },
+                                singleLine = true, shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        "Rotate PDF" -> {
+                            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Rotate by:", fontSize = 13.sp, color = NavyText)
+                                listOf(90, 180, 270).forEach { a ->
+                                    FilterChip(
+                                        selected = angle == a,
+                                        onClick = { angle = a },
+                                        label = { Text("$a°", fontSize = 12.5.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    PrimaryToolButton(
+                        when (selectedTool) {
+                            "Merge PDF" -> "Merge PDFs"
+                            "Split PDF" -> "Extract Pages"
+                            "Rotate PDF" -> "Rotate PDF"
+                            "PDF to Images" -> "Convert to Images"
+                            "Images to PDF" -> "Create PDF"
+                            else -> "Process"
+                        },
+                        enabled = files.isNotEmpty() && (selectedTool != "Merge PDF" || files.size >= 2),
+                        busy = busy
+                    ) {
+                        resultB64 = null; pageImages = emptyList()
+                        when (selectedTool) {
+                            "Merge PDF" -> scope.launch {
+                                busy = true
+                                val b64s = ArrayList<String>()
+                                for (f in files) {
+                                    val b = loadFileBase64(f.id)
+                                    if (b == null) { busy = false; errorText = "Could not read ${f.name}."; return@launch }
+                                    b64s.add(b)
+                                }
+                                busy = false
+                                val args = "{\"pdfs\":[${b64s.joinToString(",") { "\"$it\"" }}]}"
+                                runOp("merge", args) { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "merged.pdf"
+                                    statusText = "Merged ${files.size} PDFs into ${res.asyncStr("pages")} page(s)."
+                                    recordHistory("Merge PDF", "PDFs merged", "${files.size} files")
+                                }
+                            }
+                            "Split PDF" -> scope.launch {
+                                val f = files.first()
+                                val total = pageCount ?: run {
+                                    busy = true
+                                    if (ensurePdfLibsReady() != null) { busy = false; return@launch }
+                                    val b = loadFileBase64(f.id) ?: run { busy = false; return@launch }
+                                    pdfOp("count", "{\"pdf\":\"$b\"}")
+                                    val r = awaitAsync("pdf", 60_000)
+                                    busy = false
+                                    r?.asyncStr("pages")?.toIntOrNull() ?: 0
+                                }
+                                val pages = parsePageRange(pageRange, total)
+                                if (pages.isEmpty()) { errorText = "Enter valid page numbers (this PDF has $total pages)."; return@launch }
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                runOp("extract", "{\"pdf\":\"$b64\",\"pages\":[${pages.joinToString(",")}]}") { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "extracted.pdf"
+                                    statusText = "Extracted ${res.asyncStr("pages")} page(s)."
+                                    recordHistory("Split PDF", "Pages extracted", pages.joinToString(","))
+                                }
+                            }
+                            "Rotate PDF" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                runOp("rotate", "{\"pdf\":\"$b64\",\"angle\":$angle}") { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "rotated.pdf"
+                                    statusText = "Rotated ${res.asyncStr("pages")} page(s) by $angle°."
+                                    recordHistory("Rotate PDF", "PDF rotated", "$angle°")
+                                }
+                            }
+                            "PDF to Images" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                runOp("render", "{\"pdf\":\"$b64\",\"scale\":1.6,\"maxPages\":20}") { res ->
+                                    val arr = res["images"] as? kotlinx.serialization.json.JsonArray
+                                    pageImages = arr?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: emptyList()
+                                    pageBitmaps = pageImages.mapIndexedNotNull { idx, u ->
+                                        decodeBitmapFromDataUrl(u)?.let { idx to it }
+                                    }.toMap()
+                                    val totalPages = res.asyncStr("pages")
+                                    statusText = "Rendered ${pageImages.size} of $totalPages page(s) as images."
+                                    recordHistory("PDF to Images", "PDF rendered", "${pageImages.size} pages")
+                                }
+                            }
+                            "Images to PDF" -> scope.launch {
+                                busy = true
+                                val imgs = ArrayList<String>()
+                                for (f in files) {
+                                    val b = loadFileBase64(f.id)
+                                    if (b == null) { busy = false; errorText = "Could not read ${f.name}."; return@launch }
+                                    val mime = if (f.dataUrlMime().contains("png")) "image/png" else "image/jpeg"
+                                    imgs.add("{\"b64\":\"$b\",\"mime\":\"$mime\"}")
+                                }
+                                busy = false
+                                runOp("imagesToPdf", "{\"images\":[${imgs.joinToString(",")}]}") { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "images.pdf"
+                                    statusText = "Created a ${res.asyncStr("pages")}-page PDF from ${files.size} image(s)."
+                                    recordHistory("Images to PDF", "PDF created", "${files.size} images")
+                                }
+                            }
+                        }
+                    }
+                    if (busy) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(19.dp))
+                            Spacer(Modifier.width(9.dp))
+                            Text("Working…", fontSize = 13.sp, color = MutedText)
+                        }
+                    }
+                    if (errorText != null) Text(errorText!!, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                    if (statusText != null) Text(statusText!!, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF15803D))
+                    if (resultB64 != null) {
+                        Button(
+                            onClick = {
+                                downloadFileBase64(resultName, resultB64!!, "application/pdf")
+                                state.toast("Downloaded $resultName")
+                            },
+                            shape = RoundedCornerShape(11.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                        ) { Text("Download $resultName", fontWeight = FontWeight.SemiBold) }
+                    }
+                    pageImages.forEachIndexed { i, url ->
+                        val bmp = pageBitmaps[i]
+                        WhiteCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                                if (bmp != null) {
+                                    androidx.compose.foundation.Image(
+                                        bmp, contentDescription = "Page ${i + 1}",
+                                        modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)
+                                            .clip(RoundedCornerShape(8.dp)).background(Color(0xFFF3F2FA))
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        downloadFileBase64("page-${i + 1}.png", url.substringAfter(",", ""), "image/png")
+                                        state.toast("Downloaded page-${i + 1}.png")
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) { Text("Download Page ${i + 1} (PNG)", fontSize = 12.5.sp) }
+                            }
+                        }
                     }
                 }
             }
@@ -1764,12 +1958,6 @@ fun SettingsScreen(state: AppState) {
     var editing by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
-    var notifRewards by remember {
-        mutableStateOf(try { window.localStorage.getItem("qm_notif_rewards") != "0" } catch (e: Exception) { true })
-    }
-    var notifUpdates by remember {
-        mutableStateOf(try { window.localStorage.getItem("qm_notif_updates") != "0" } catch (e: Exception) { true })
-    }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -1896,31 +2084,10 @@ fun SettingsScreen(state: AppState) {
                                                 }
                                             )
                                         }
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("Language", fontSize = 13.5.sp, color = NavyText, modifier = Modifier.weight(1f))
-                                            Row(
-                                                Modifier.clip(RoundedCornerShape(8.dp))
-                                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                                                    .padding(horizontal = 11.dp, vertical = 7.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text("English", fontSize = 12.5.sp, color = NavyText)
-                                                Spacer(Modifier.width(6.dp))
-                                                Text("▾", color = MutedText, fontSize = 12.sp)
-                                            }
-                                        }
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("Default Tool", fontSize = 13.5.sp, color = NavyText, modifier = Modifier.weight(1f))
-                                            Row(
-                                                Modifier.clip(RoundedCornerShape(8.dp))
-                                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                                                    .padding(horizontal = 11.dp, vertical = 7.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text("QR Generator", fontSize = 12.5.sp, color = NavyText)
-                                                Spacer(Modifier.width(6.dp))
-                                                Text("▾", color = MutedText, fontSize = 12.sp)
-                                            }
+                                        Text(
+                                            "Language: English (the app and website are English-only).",
+                                            fontSize = 12.sp, color = MutedText
+                                        )
                                         }
                                     }
                                 }
@@ -1988,7 +2155,7 @@ fun SettingsScreen(state: AppState) {
                                         }
                                         Text("Need help? Contact our support team.", fontSize = 12.5.sp, color = MutedText)
                                         Button(
-                                            onClick = { state.openPlaceholder("Help & Support") },
+                                            onClick = { state.navigate(Screen.Support) },
                                             shape = RoundedCornerShape(9.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary)
                                         ) { Text("Get Support", fontSize = 12.5.sp) }
@@ -2044,34 +2211,22 @@ fun SettingsScreen(state: AppState) {
                 "Notifications" -> {
                     item {
                         WhiteCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text("Notifications", fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("Reward notifications", fontSize = 13.5.sp, color = NavyText)
-                                        Text("Spin, task and bonus reward updates", fontSize = 11.5.sp, color = MutedText)
-                                    }
-                                    Switch(
-                                        checked = notifRewards,
-                                        onCheckedChange = {
-                                            notifRewards = it
-                                            try { window.localStorage.setItem("qm_notif_rewards", if (it) "1" else "0") } catch (e: Exception) { }
-                                        }
-                                    )
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("App updates", fontSize = 13.5.sp, color = NavyText)
-                                        Text("New tools and version announcements", fontSize = 11.5.sp, color = MutedText)
-                                    }
-                                    Switch(
-                                        checked = notifUpdates,
-                                        onCheckedChange = {
-                                            notifUpdates = it
-                                            try { window.localStorage.setItem("qm_notif_updates", if (it) "1" else "0") } catch (e: Exception) { }
-                                        }
-                                    )
-                                }
+                                Text(
+                                    "Announcements and your request updates live on the Notifications page.",
+                                    fontSize = 12.5.sp, color = MutedText
+                                )
+                                Button(
+                                    onClick = { state.navigate(Screen.Notifications) },
+                                    shape = RoundedCornerShape(9.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary)
+                                ) { Text("Open Notifications", fontSize = 12.5.sp) }
+                                Text(
+                                    "Free-spin reward: turning notifications ON in the QR Master Android app gives +3 free spins (once per account). " +
+                                        "Used so far: ${profile?.notifSpinsUsed ?: 0}. That reward follows your phone's notification setting, so it is managed in the app — spins work on both.",
+                                    fontSize = 12.sp, color = MutedText
+                                )
                             }
                         }
                     }

@@ -53,13 +53,18 @@ import androidx.compose.ui.unit.sp
 import kotlinx.browser.window
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import qrmaster.web.data.EarnApi
 import qrmaster.web.data.FirebaseApi
 import qrmaster.web.data.Profile
 import qrmaster.web.data.WebUser
+import qrmaster.web.data.ensureReferralProfile
 
 enum class Screen {
     Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Tasks,
-    Settings, Premium, Login, Placeholder
+    Settings, Premium, Login, Placeholder,
+    Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage,
+    AgeCalc, BmiCalc, UnitConvert, CurrencyConvert, PercentCalc,
+    Bonus, Invite, History, Notifications, Support, About
 }
 
 data class QrPreset(val typeLabel: String, val fieldLabel: String, val initialContent: String)
@@ -76,6 +81,8 @@ class AppState {
     var darkMode by mutableStateOf(false)
     var searchQuery by mutableStateOf("")
     var qrPreset by mutableStateOf<QrPreset?>(null)
+    var pdfTool by mutableStateOf("PDF Converter")
+    var notifDot by mutableStateOf(false)
     var toastMessage by mutableStateOf<String?>(null)
     val activity = mutableStateListOf<String>()
 
@@ -89,6 +96,11 @@ class AppState {
     fun openQr(preset: QrPreset?) {
         qrPreset = preset
         screen = Screen.QrGenerator
+    }
+
+    fun openPdf(tool: String) {
+        pdfTool = tool
+        screen = Screen.PdfConverter
     }
 
     fun applySearch(q: String) {
@@ -129,8 +141,22 @@ fun App() {
     LaunchedEffect(Unit) {
         try {
             state.darkMode = window.localStorage.getItem("qm_dark") == "1"
+            // Referral link landing (?ref=CODE): stash the code; the Invite
+            // screen offers it for one-tap apply after sign-up/login.
+            val search = window.location.search
+            if (search.contains("ref=")) {
+                val code = search.substringAfter("ref=")
+                    .takeWhile { it.isLetterOrDigit() }
+                if (code.isNotBlank()) window.localStorage.setItem("qm_pending_ref", code.uppercase())
+            }
         } catch (e: Exception) { }
         if (state.user != null) state.refreshProfile()
+    }
+    LaunchedEffect(state.user) {
+        if (state.user != null) {
+            // App-parity presence + referral-index maintenance (best effort).
+            try { EarnApi.ensureReferralProfile() } catch (e: Exception) { }
+        }
     }
     LaunchedEffect(state.toastMessage) {
         if (state.toastMessage != null) {
@@ -321,13 +347,20 @@ fun TopBar(state: AppState) {
             QrIcon(if (state.darkMode) IconKind.Moon else IconKind.Sun, MutedText, size = 20.dp)
         }
         Spacer(Modifier.width(4.dp))
-        // Bell with badge dot
-        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+        // Bell -> Notifications page; the dot lights only when the
+        // Notifications screen found an announcement or pending items.
+        Box(
+            Modifier.size(38.dp).clip(CircleShape)
+                .clickable { state.navigate(Screen.Notifications) },
+            contentAlignment = Alignment.Center
+        ) {
             QrIcon(IconKind.Bell, MutedText, size = 20.dp)
-            Box(
-                Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 7.dp)
-                    .size(8.dp).clip(CircleShape).background(Color(0xFFEF4444))
-            )
+            if (state.notifDot) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 7.dp)
+                        .size(8.dp).clip(CircleShape).background(Color(0xFFEF4444))
+                )
+            }
         }
         Spacer(Modifier.width(8.dp))
         AvatarButton(state)
@@ -357,7 +390,8 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
         NavItem(state, Screen.AllTools, IconKind.Grid, "All Tools", onNavigate)
         NavItem(state, Screen.Wallet, IconKind.Wallet, "Wallet", onNavigate)
         NavItem(state, Screen.Spin, IconKind.Spin, "Spin & Earn", onNavigate, badge = "New")
-        NavItem(state, Screen.Placeholder, IconKind.Gift, "Bonus Code", onNavigate, placeholder = "Bonus Code")
+        NavItem(state, Screen.Bonus, IconKind.Gift, "Bonus Code", onNavigate)
+        NavItem(state, Screen.Invite, IconKind.Users, "Invite & Earn", onNavigate)
         NavItem(state, Screen.Premium, IconKind.Crown, "Premium", onNavigate, crownGold = true)
 
         Spacer(Modifier.height(18.dp))
@@ -366,10 +400,10 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
             modifier = Modifier.padding(horizontal = 12.dp)
         )
         Spacer(Modifier.height(6.dp))
-        NavItem(state, Screen.Placeholder, IconKind.Clock, "History", onNavigate, placeholder = "History")
+        NavItem(state, Screen.History, IconKind.Clock, "History", onNavigate)
         NavItem(state, Screen.Settings, IconKind.Gear, "Settings", onNavigate)
-        NavItem(state, Screen.Placeholder, IconKind.Help, "Help & Support", onNavigate, placeholder = "Help & Support")
-        NavItem(state, Screen.Placeholder, IconKind.Info, "About Us", onNavigate, placeholder = "About Us")
+        NavItem(state, Screen.Support, IconKind.Help, "Help & Support", onNavigate)
+        NavItem(state, Screen.About, IconKind.Info, "About Us", onNavigate)
 
         Spacer(Modifier.height(26.dp))
         // Go Premium card (reference: light lavender)
