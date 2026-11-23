@@ -10,7 +10,7 @@ plugins {
 kotlin {
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
-        moduleName = "qrmaster"
+        outputModuleName.set("qrmaster")
         browser {
             commonWebpackConfig {
                 outputFileName = "qrmaster.js"
