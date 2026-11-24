@@ -645,82 +645,6 @@ fun PdfEditorScreen(state: AppState) {
         }
     }
 
-    /**
-     * Organize → "Add Pages from PDF": appends every page of another
-     * PDF to the open document (the shell's appendTo op returns the
-     * combined file, which becomes the editor's new source) and adds
-     * the new pages at the end of the page list.
-     */
-    fun addPagesFlow() {
-        val srcB64 = pdfB64 ?: return
-        if (pages.size >= 50) { errorText = "This document already fills the editor's 50-page limit."; return }
-        launchPick(scope, PDF_SPEC, false, current = { emptyList() }) { incoming, err ->
-            if (err != null) { errorText = err; return@launchPick }
-            val f = incoming.firstOrNull() ?: return@launchPick
-            scope.launch {
-                val other = loadFileBase64(f.id) ?: run { errorText = "Could not read ${f.name}."; return@launch }
-                busy = true; errorText = null; statusText = "Adding pages from ${f.name}…"
-                val libErr = ensureEditorLibs()
-                if (libErr != null) { busy = false; errorText = libErr; return@launch }
-                val res = pdfCall("appendTo", buildJsonObject {
-                    put("pdf", srcB64); put("pdf2", other)
-                }.toString(), 300_000)
-                busy = false
-                if (res == null || !res.asyncOk()) {
-                    errorText = res?.asyncError() ?: "Could not add pages from that PDF."
-                    return@launch
-                }
-                val combined = res.asyncStr("b64")
-                val from = res.asyncStr("from").toIntOrNull() ?: 0
-                val added = res.asyncStr("added").toIntOrNull() ?: 0
-                if (combined.isBlank() || added <= 0) { errorText = "That PDF has no pages to add."; return@launch }
-                snapshot()
-                val oldSize = pages.size
-                val take = min(added, max(0, 50 - oldSize))
-                pdfB64 = combined
-                if (take > 0) pages = pages + (0 until take).map { EdPageState(srcIndex = from + it) }
-                pdfSaveSession(combined, fileName)
-                statusText = when {
-                    take < added -> "Added the first $take of $added pages from ${f.name} (50-page editor limit)."
-                    else -> "Added $added page(s) from ${f.name} — they are at the end of the list; reorder them here if you need to."
-                }
-                // The combined document may carry different form fields.
-                val fres = pdfCall("formFields", buildJsonObject { put("pdf", combined) }.toString(), 60_000)
-                if (fres != null && fres.asyncOk()) formFields = parseEdFormFields(fres)
-                afterStructureChange(if (take > 0) oldSize else current)
-            }
-        }
-    }
-
-    /**
-     * Organize → "Extract to New PDF": downloads a new PDF holding the
-     * chosen pages (numbers as shown in the page list) in list order.
-     */
-    fun extractFlow() {
-        val srcB64 = pdfB64 ?: return
-        val picked = edParseRange(extractRange, pages.size)
-        if (picked.isEmpty()) { errorText = "Enter the pages to extract first, like 1-3, 5."; return }
-        val srcPages = picked.mapNotNull { i ->
-            pages.getOrNull(i)?.srcIndex?.takeIf { it >= 0 }?.plus(1)
-        }
-        if (srcPages.isEmpty()) { errorText = "Those are blank pages — there is nothing to extract."; return }
-        busy = true; errorText = null
-        scope.launch {
-            val libErr = ensureEditorLibs()
-            if (libErr != null) { busy = false; errorText = libErr; return@launch }
-            val res = pdfCall("extract", buildJsonObject {
-                put("pdf", srcB64)
-                put("pages", buildJsonArray { srcPages.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } })
-            }.toString(), 300_000)
-            busy = false
-            if (res == null || !res.asyncOk()) { errorText = res?.asyncError() ?: "Extract failed."; return@launch }
-            val outName = fileName.substringBeforeLast(".").ifBlank { "document" } + "-extract.pdf"
-            downloadFileBase64(outName, res.asyncStr("b64"), "application/pdf")
-            recordHistory("PDF Editor", outName, "Extracted ${srcPages.size} page(s)")
-            statusText = "Downloaded $outName with ${res.asyncStr("pages")} page(s)."
-        }
-    }
-
     // ── actions used by the toolbar / panels ──────────────────────────────
     fun addImageFlow() {
         launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
@@ -1321,6 +1245,82 @@ fun PdfEditorScreen(state: AppState) {
         previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
         renderCurrent()
         pages.indices.forEach { renderThumb(it) }
+    }
+
+    /**
+     * Organize → "Add Pages from PDF": appends every page of another
+     * PDF to the open document (the shell's appendTo op returns the
+     * combined file, which becomes the editor's new source) and adds
+     * the new pages at the end of the page list.
+     */
+    fun addPagesFlow() {
+        val srcB64 = pdfB64 ?: return
+        if (pages.size >= 50) { errorText = "This document already fills the editor's 50-page limit."; return }
+        launchPick(scope, PDF_SPEC, false, current = { emptyList() }) { incoming, err ->
+            if (err != null) { errorText = err; return@launchPick }
+            val f = incoming.firstOrNull() ?: return@launchPick
+            scope.launch {
+                val other = loadFileBase64(f.id) ?: run { errorText = "Could not read ${f.name}."; return@launch }
+                busy = true; errorText = null; statusText = "Adding pages from ${f.name}…"
+                val libErr = ensureEditorLibs()
+                if (libErr != null) { busy = false; errorText = libErr; return@launch }
+                val res = pdfCall("appendTo", buildJsonObject {
+                    put("pdf", srcB64); put("pdf2", other)
+                }.toString(), 300_000)
+                busy = false
+                if (res == null || !res.asyncOk()) {
+                    errorText = res?.asyncError() ?: "Could not add pages from that PDF."
+                    return@launch
+                }
+                val combined = res.asyncStr("b64")
+                val from = res.asyncStr("from").toIntOrNull() ?: 0
+                val added = res.asyncStr("added").toIntOrNull() ?: 0
+                if (combined.isBlank() || added <= 0) { errorText = "That PDF has no pages to add."; return@launch }
+                snapshot()
+                val oldSize = pages.size
+                val take = min(added, max(0, 50 - oldSize))
+                pdfB64 = combined
+                if (take > 0) pages = pages + (0 until take).map { EdPageState(srcIndex = from + it) }
+                pdfSaveSession(combined, fileName)
+                statusText = when {
+                    take < added -> "Added the first $take of $added pages from ${f.name} (50-page editor limit)."
+                    else -> "Added $added page(s) from ${f.name} — they are at the end of the list; reorder them here if you need to."
+                }
+                // The combined document may carry different form fields.
+                val fres = pdfCall("formFields", buildJsonObject { put("pdf", combined) }.toString(), 60_000)
+                if (fres != null && fres.asyncOk()) formFields = parseEdFormFields(fres)
+                afterStructureChange(if (take > 0) oldSize else current)
+            }
+        }
+    }
+
+    /**
+     * Organize → "Extract to New PDF": downloads a new PDF holding the
+     * chosen pages (numbers as shown in the page list) in list order.
+     */
+    fun extractFlow() {
+        val srcB64 = pdfB64 ?: return
+        val picked = edParseRange(extractRange, pages.size)
+        if (picked.isEmpty()) { errorText = "Enter the pages to extract first, like 1-3, 5."; return }
+        val srcPages = picked.mapNotNull { i ->
+            pages.getOrNull(i)?.srcIndex?.takeIf { it >= 0 }?.plus(1)
+        }
+        if (srcPages.isEmpty()) { errorText = "Those are blank pages — there is nothing to extract."; return }
+        busy = true; errorText = null
+        scope.launch {
+            val libErr = ensureEditorLibs()
+            if (libErr != null) { busy = false; errorText = libErr; return@launch }
+            val res = pdfCall("extract", buildJsonObject {
+                put("pdf", srcB64)
+                put("pages", buildJsonArray { srcPages.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } })
+            }.toString(), 300_000)
+            busy = false
+            if (res == null || !res.asyncOk()) { errorText = res?.asyncError() ?: "Extract failed."; return@launch }
+            val outName = fileName.substringBeforeLast(".").ifBlank { "document" } + "-extract.pdf"
+            downloadFileBase64(outName, res.asyncStr("b64"), "application/pdf")
+            recordHistory("PDF Editor", outName, "Extracted ${srcPages.size} page(s)")
+            statusText = "Downloaded $outName with ${res.asyncStr("pages")} page(s)."
+        }
     }
 
     // ── layout ────────────────────────────────────────────────────────────
