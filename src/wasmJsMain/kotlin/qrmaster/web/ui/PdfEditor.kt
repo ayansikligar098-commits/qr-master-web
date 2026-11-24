@@ -1528,8 +1528,10 @@ fun PdfEditorScreen(state: AppState) {
                         if (busy) CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.align(Alignment.Center))
                     }
                     Spacer(Modifier.height(8.dp))
-                    // ── bottom bar ──
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // ── bottom bar (scrolls sideways on narrow screens
+                    // instead of clipping the zoom controls) ──
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         OutlinedButton(onClick = { if (current > 0) { current--; selectedId = null; if (previews[current] == null) renderCurrent() } },
                             enabled = current > 0) { Text("‹ Prev", fontSize = 12.5.sp) }
                         Spacer(Modifier.width(10.dp))
