@@ -225,6 +225,8 @@ fun PdfEditorScreen(state: AppState) {
     var selectedId by remember { mutableStateOf<Int?>(null) }
     var nextId by remember { mutableStateOf(1) }
     var zoom by remember { mutableStateOf(1f) }
+    var zoomTouched by remember { mutableStateOf(false) } // user picked a zoom: stop auto-fitting
+    var propsOpen by remember { mutableStateOf(false) } // narrow screens: Properties overlay
     var busy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -360,6 +362,7 @@ fun PdfEditorScreen(state: AppState) {
         val capped = min(count, 50)
         pages = (0 until capped).map { EdPageState(srcIndex = it) }
         current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
+        zoom = 1f; zoomTouched = false; propsOpen = false
         previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
         // Gate on page 1 actually rendering. The pdf-lib page count above
         // ignores encryption, so without this gate a password-protected
@@ -1215,68 +1218,20 @@ fun PdfEditorScreen(state: AppState) {
             }
         } else {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-              val wide = maxWidth >= 1150.dp
-              // Narrow layout: at 100% the page is far wider than the
-              // workspace (rail + padding leave ~310 dp at a 500 dp
-              // window), so the canvas viewport collapsed to a sliver
-              // behind two scrollbars. Fit the page width once — only
-              // while the user hasn't picked a zoom themselves.
-              LaunchedEffect(maxWidth, pages.isNotEmpty()) {
-                  if (!wide && pages.isNotEmpty() && zoom == 1f) {
-                      val pageW = dims[current]?.first ?: 595.28f
-                      val avail = (maxWidth.value - 190f).coerceAtLeast(150f)
-                      zoom = (avail / pageW).coerceIn(0.3f, 1f)
-                  }
+              val wide = maxWidth >= 980.dp
+              // Full editor workspace (owner's order): opening a PDF opens
+              // a real edit page — a full-width toolbar on top, page
+              // thumbnails on the left, the page itself large and centred,
+              // and Properties as a right-hand panel. On narrower screens
+              // Properties floats over the page as an overlay instead of
+              // stacking underneath and crushing the page into a sliver
+              // (the old <1150 dp layout did exactly that on smaller PCs).
+              LaunchedEffect(selectedId, wide) {
+                  if (selectedId != null && !wide) propsOpen = true
               }
+              Box(Modifier.fillMaxSize()) {
               Column(Modifier.fillMaxSize()) {
-                Row(Modifier.weight(1f)) {
-                // ── thumbnails rail ──
-                LazyColumn(
-                    Modifier.width(96.dp).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    itemsIndexed(pages) { idx, pg ->
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            val thumbBmp = remember(thumbs[idx]) { thumbs[idx]?.let { decodeBitmapFromDataUrl(it) } }
-                            Box(
-                                Modifier.width(68.dp).height(92.dp).clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White)
-                                    .border(if (idx == current) 2.dp else 1.dp,
-                                        if (idx == current) PurplePrimary else Color(0xFFCBD5E1), RoundedCornerShape(8.dp))
-                                    .clickable { current = idx; selectedId = null; if (previews[idx] == null) renderCurrent() },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (thumbBmp != null) Image(thumbBmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                                else if (pg.srcIndex < 0) Text("Blank", fontSize = 10.sp, color = MutedText)
-                                else if (pageErrors[idx] != null) Text("!", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB91C1C))
-                                else CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(14.dp))
-                            }
-                            Text("${idx + 1}", fontSize = 11.sp, fontWeight = if (idx == current) FontWeight.Bold else FontWeight.Normal,
-                                color = if (idx == current) PurplePrimary else MutedText)
-                            if (tab == EdTab.Organize) {
-                                Row {
-                                    TextButton(onClick = {
-                                        if (idx > 0) { snapshot(); pages = pages.toMutableList().also { val t = it[idx - 1]; it[idx - 1] = it[idx]; it[idx] = t }; afterStructureChange(idx - 1) }
-                                    }, enabled = idx > 0) { Text("↑", fontSize = 13.sp) }
-                                    TextButton(onClick = {
-                                        if (idx < pages.size - 1) { snapshot(); pages = pages.toMutableList().also { val t = it[idx + 1]; it[idx + 1] = it[idx]; it[idx] = t }; afterStructureChange(idx + 1) }
-                                    }, enabled = idx < pages.size - 1) { Text("↓", fontSize = 13.sp) }
-                                }
-                            }
-                        }
-                    }
-                    item {
-                        OutlinedButton(onClick = {
-                            snapshot()
-                            pages = pages.toMutableList().also { it.add(current + 1, EdPageState(srcIndex = -1)) }
-                            afterStructureChange(current + 1)
-                        }) { Text("+ Add Page", fontSize = 11.5.sp) }
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                // ── centre workspace ──
-                Column(Modifier.weight(1f)) {
+                // ── workspace toolbar (full width) ──
                     // file chip
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         QrIcon(IconKind.Pdf, Color(0xFFDC2626), size = 18.dp)
@@ -1497,14 +1452,75 @@ fun PdfEditorScreen(state: AppState) {
                                 fontSize = 12.sp, color = MutedText, modifier = Modifier.padding(top = 6.dp))
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    // ── page viewport ──
-                    Box(
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                // ── thumbnails rail ──
+                LazyColumn(
+                    Modifier.width(96.dp).fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    itemsIndexed(pages) { idx, pg ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val thumbBmp = remember(thumbs[idx]) { thumbs[idx]?.let { decodeBitmapFromDataUrl(it) } }
+                            Box(
+                                Modifier.width(68.dp).height(92.dp).clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White)
+                                    .border(if (idx == current) 2.dp else 1.dp,
+                                        if (idx == current) PurplePrimary else Color(0xFFCBD5E1), RoundedCornerShape(8.dp))
+                                    .clickable { current = idx; selectedId = null; if (previews[idx] == null) renderCurrent() },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (thumbBmp != null) Image(thumbBmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                                else if (pg.srcIndex < 0) Text("Blank", fontSize = 10.sp, color = MutedText)
+                                else if (pageErrors[idx] != null) Text("!", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB91C1C))
+                                else CircularProgressIndicator(color = PurplePrimary, modifier = Modifier.size(14.dp))
+                            }
+                            Text("${idx + 1}", fontSize = 11.sp, fontWeight = if (idx == current) FontWeight.Bold else FontWeight.Normal,
+                                color = if (idx == current) PurplePrimary else MutedText)
+                            if (tab == EdTab.Organize) {
+                                Row {
+                                    TextButton(onClick = {
+                                        if (idx > 0) { snapshot(); pages = pages.toMutableList().also { val t = it[idx - 1]; it[idx - 1] = it[idx]; it[idx] = t }; afterStructureChange(idx - 1) }
+                                    }, enabled = idx > 0) { Text("↑", fontSize = 13.sp) }
+                                    TextButton(onClick = {
+                                        if (idx < pages.size - 1) { snapshot(); pages = pages.toMutableList().also { val t = it[idx + 1]; it[idx + 1] = it[idx]; it[idx] = t }; afterStructureChange(idx + 1) }
+                                    }, enabled = idx < pages.size - 1) { Text("↓", fontSize = 13.sp) }
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        OutlinedButton(onClick = {
+                            snapshot()
+                            pages = pages.toMutableList().also { it.add(current + 1, EdPageState(srcIndex = -1)) }
+                            afterStructureChange(current + 1)
+                        }) { Text("+ Add Page", fontSize = 11.5.sp) }
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                // ── centre: page viewport + bottom bar ──
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    // ── page viewport: the page is fitted to the
+                    // viewport width until the user zooms manually,
+                    // and centred whenever it is narrower than the
+                    // viewport — the page is the dominant element ──
+                    BoxWithConstraints(
                         Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFECECF3))
                     ) {
+                        val vpW = maxWidth
+                        LaunchedEffect(vpW, current, dims[current], zoomTouched) {
+                            if (!zoomTouched) {
+                                val pw = dims[current]?.first ?: 595.28f
+                                val fit = ((vpW.value - 36f) / pw).coerceIn(0.3f, 1.6f)
+                                if (abs(fit - zoom) > 0.01f) zoom = fit
+                            }
+                        }
                         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                                Box(Modifier.padding(16.dp)) {
+                                val pageDp = ((dims[current]?.first ?: 595.28f) * zoom).dp
+                                val sidePad = maxOf(16.dp, (vpW - pageDp) / 2)
+                                Box(Modifier.padding(horizontal = sidePad, vertical = 16.dp)) {
                                     pageCanvas()
                                 }
                             }
@@ -1522,21 +1538,38 @@ fun PdfEditorScreen(state: AppState) {
                         OutlinedButton(onClick = { if (current < pages.size - 1) { current++; selectedId = null; if (previews[current] == null) renderCurrent() } },
                             enabled = current < pages.size - 1) { Text("Next ›", fontSize = 12.5.sp) }
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { zoom = max(0.4f, zoom - 0.1f) }) { Text("−", fontSize = 16.sp) }
+                        if (!wide) {
+                            TextButton(onClick = { propsOpen = !propsOpen }) { Text("Properties", fontSize = 12.5.sp) }
+                        }
+                        TextButton(onClick = { zoomTouched = true; zoom = max(0.4f, zoom - 0.1f) }) { Text("−", fontSize = 16.sp) }
                         Text("${(zoom * 100).toInt()}%", fontSize = 12.5.sp, color = NavyText)
-                        TextButton(onClick = { zoom = min(2.5f, zoom + 0.1f) }) { Text("+", fontSize = 16.sp) }
-                        TextButton(onClick = { zoom = 1f }) { Text("100%", fontSize = 12.5.sp) }
+                        TextButton(onClick = { zoomTouched = true; zoom = min(2.5f, zoom + 0.1f) }) { Text("+", fontSize = 16.sp) }
+                        TextButton(onClick = { zoomTouched = true; zoom = 1f }) { Text("100%", fontSize = 12.5.sp) }
+                        TextButton(onClick = { zoomTouched = false }) { Text("Fit", fontSize = 12.5.sp) }
                     }
                 }
                     if (wide) {
                         Spacer(Modifier.width(12.dp))
-                        WhiteCard(Modifier.width(280.dp).fillMaxHeight()) { propsPanel() }
+                        WhiteCard(Modifier.width(300.dp).fillMaxHeight()) { propsPanel() }
                     }
                 }
-                if (!wide) {
-                    Spacer(Modifier.height(10.dp))
-                    WhiteCard(Modifier.fillMaxWidth().height(280.dp)) { propsPanel() }
-                }
+              }
+              // ── narrow screens: Properties overlay ──
+              if (!wide && propsOpen) {
+                  Box(
+                      Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(320.dp)
+                          .padding(start = 4.dp, end = 10.dp, top = 2.dp, bottom = 2.dp)
+                  ) {
+                      WhiteCard(Modifier.fillMaxSize()) {
+                          Column(Modifier.fillMaxSize()) {
+                              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                  TextButton(onClick = { propsOpen = false }) { Text("Close ✕", fontSize = 12.5.sp) }
+                              }
+                              Box(Modifier.weight(1f).fillMaxWidth()) { propsPanel() }
+                          }
+                      }
+                  }
+              }
               }
             }
         }
