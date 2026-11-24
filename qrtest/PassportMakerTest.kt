@@ -4,8 +4,6 @@ import qrmaster.web.ui.PPCrop
 import qrmaster.web.ui.PPRectF
 import qrmaster.web.ui.PP_BG_CLASSICAL
 import qrmaster.web.ui.PP_BG_STYLISH
-import qrmaster.web.ui.PP_OUTFITS
-import qrmaster.web.ui.PP_OUTFIT_TOP_FRAC
 import qrmaster.web.ui.PP_PAPER_OPTIONS
 import qrmaster.web.ui.ppBackground
 import qrmaster.web.ui.ppCropMove
@@ -13,8 +11,6 @@ import qrmaster.web.ui.ppCropResize
 import qrmaster.web.ui.ppFaceCrop
 import qrmaster.web.ui.ppHeadBox
 import qrmaster.web.ui.ppMmToPx
-import qrmaster.web.ui.ppOutfitRect
-import qrmaster.web.ui.ppOutfitRectForPerson
 import qrmaster.web.ui.ppPaper
 import qrmaster.web.ui.ppPreset
 import qrmaster.web.ui.ppPxToMm
@@ -110,86 +106,6 @@ fun main() {
     mcheck("3 gradients in stylish", PP_BG_STYLISH.count { it.isGradient } == 3, "got ${PP_BG_STYLISH.count { it.isGradient }}")
     mcheck("sky gradient stops", ppBackground("skygradient")?.colors == listOf("#66B5F2", "#CBE8FB"))
     mcheck("all bg ids unique", (PP_BG_CLASSICAL + PP_BG_STYLISH).map { it.id }.distinct().size == 20)
-
-    // ── Outfits ──────────────────────────────────────────────────────────
-    mcheck("outfits = 8", PP_OUTFITS.size == 8, "got ${PP_OUTFITS.size}")
-    mcheck("men = 3", PP_OUTFITS.count { it.category == "Men's" } == 3)
-    mcheck("women = 3", PP_OUTFITS.count { it.category == "Women's" } == 3)
-    mcheck("children = 2", PP_OUTFITS.count { it.category == "Children's" } == 2)
-    mcheck("outfit paths are pngs in outfits/", PP_OUTFITS.all { it.path.startsWith("outfits/") && it.path.endsWith(".png") })
-
-    // ── Outfit placement (India frame 413x531) ───────────────────────────
-    val r = ppOutfitRect(413, 531, 1f, 0f)
-    mcheck("outfit w = 450", r.w == 450, "got ${r.w}")
-    mcheck("outfit h = 338", r.h == 338, "got ${r.h}")
-    mcheck("outfit centred (x = -19)", r.x == -19, "got ${r.x}")
-    mcheck("outfit collar at 77% height", mnear(r.y + 0.30f * r.h, 531f * 0.77f, 2f), "got ${r.y + 0.30f * r.h}")
-    mcheck("outfit covers frame bottom", r.y + r.h >= 531, "got ${r.y + r.h}")
-    val rBig = ppOutfitRect(413, 531, 9f, 0f)
-    val r14 = ppOutfitRect(413, 531, 1.4f, 0f)
-    mcheck("outfit scale clamps at 1.4", rBig.w == r14.w && rBig.h == r14.h, "got ${rBig.w} vs ${r14.w}")
-    val rShift = ppOutfitRect(413, 531, 1f, 0.05f)
-    mcheck("outfit yShift moves it down", rShift.y > r.y, "got ${rShift.y} vs ${r.y}")
-    val rUs = ppOutfitRect(600, 600, 1f, 0f)
-    mcheck("outfit US frame keeps aspect", mnearD(rUs.w.toDouble() / rUs.h, 4.0 / 3.0, 0.01), "got ${rUs.w}x${rUs.h}")
-
-    // ── Face-anchored outfit placement ───────────────────────────────────
-    // Standard framing: 3000x4000 photo, face (1200,800,600,600), India out.
-    val aCrop = ppFaceCrop(3000, 4000, 35.0 / 45.0, 1200f, 800f, 600f, 600f)
-    val aFace = PPRectF(1200f, 800f, 600f, 600f)
-    val aHead = ppHeadBox(1200f, 800f, 600f, 600f)
-    val anchored = ppOutfitRectForPerson(413, 531, aCrop, aFace, 0.94f, 1f, 0f)
-    val headWOut = aHead.w * (413f / aCrop.w)
-    val chinOut = ((aHead.y + aHead.h) - aCrop.y) * (531f / aCrop.h)
-    mcheck(
-        "anchored garment span = 2x head width",
-        mnear((0.94f * anchored.w), 2f * headWOut, 6f),
-        "span=${0.94f * anchored.w} headWOut=$headWOut rect=$anchored"
-    )
-    mcheck(
-        "anchored garment top sits just below chin",
-        mnear(anchored.y + PP_OUTFIT_TOP_FRAC * anchored.h, chinOut + 0.012f * 531f, 3f),
-        "top=${anchored.y + PP_OUTFIT_TOP_FRAC * anchored.h} chin=$chinOut rect=$anchored"
-    )
-    mcheck(
-        "anchored outfit centred on face centre",
-        mnear(anchored.x + anchored.w / 2f, (1500f - aCrop.x) * (413f / aCrop.w), 3f),
-        "rect=$anchored"
-    )
-    mcheck("anchored outfit covers frame bottom", anchored.y + anchored.h >= 531, "rect=$anchored")
-    // Same face, crop window moved DOWN 200 source px (chin rides higher
-    // in the frame): the garment must follow the chin UP by 200*sy.
-    val cropLower = PPCrop(aCrop.x, aCrop.y + 200f, aCrop.w, aCrop.h)
-    val anchoredLower = ppOutfitRectForPerson(413, 531, cropLower, aFace, 0.94f, 1f, 0f)
-    mcheck(
-        "anchored outfit follows chin when crop moves",
-        mnear((anchored.y - anchoredLower.y).toFloat(), 200f * (531f / aCrop.h), 4f),
-        "dy=${anchored.y - anchoredLower.y} expected=${200f * (531f / aCrop.h)}"
-    )
-    // Off-centre face: garment centre follows the face, not the frame.
-    val offCrop = ppFaceCrop(3000, 4000, 35.0 / 45.0, 300f, 800f, 600f, 600f)
-    val offAnchored = ppOutfitRectForPerson(413, 531, offCrop, PPRectF(300f, 800f, 600f, 600f), 0.94f, 1f, 0f)
-    mcheck(
-        "anchored outfit follows off-centre face",
-        mnear(offAnchored.x + offAnchored.w / 2f, (600f - offCrop.x) * (413f / offCrop.w), 3f),
-        "rect=$offAnchored crop=$offCrop"
-    )
-    // Children's artwork is narrower (spanFrac 0.81) → wider rect for the
-    // same garment span.
-    val childAnchored = ppOutfitRectForPerson(413, 531, aCrop, aFace, 0.81f, 1f, 0f)
-    mcheck(
-        "child outfit rect wider for same span",
-        mnear((0.81f * childAnchored.w), 2f * headWOut, 6f) && childAnchored.w > anchored.w,
-        "child=$childAnchored adult=$anchored"
-    )
-    // No face → exact fallback to the frame-fraction placement.
-    val noFace = ppOutfitRectForPerson(413, 531, aCrop, null, 0.94f, 1f, 0f)
-    val fallback = ppOutfitRect(413, 531, 1f, 0f)
-    mcheck(
-        "anchored falls back without a face",
-        noFace.x == fallback.x && noFace.y == fallback.y && noFace.w == fallback.w && noFace.h == fallback.h,
-        "got $noFace vs $fallback"
-    )
 
     // ── Crop move / resize ───────────────────────────────────────────────
     val base = PPCrop(200f, 200f, 350f, 450f) // 35:45 aspect in a 1000x1200 photo

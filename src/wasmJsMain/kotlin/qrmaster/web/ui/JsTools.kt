@@ -100,6 +100,15 @@ external fun bgProgress(): String
 @JsFun("(dataUrl, key) => { window.__qmBgRemove(dataUrl, key); }")
 external fun bgRemoveStartKeyed(dataUrl: String, key: String)
 
+/** Passport Maker matting — the MODNet engine (HivisionIDPhotos model,
+ *  Apache-2.0) running on-device via ONNX Runtime Web. */
+@JsFun("(dataUrl, key) => { window.__qmBgRemoveModnet(dataUrl, key); }")
+external fun bgRemoveModnetStartKeyed(dataUrl: String, key: String)
+
+/** Last MODNet timing report (JSON: engine/loadMs/runMs) — diagnostics. */
+@JsFun("() => { return window.__qmBgTiming || ''; }")
+external fun bgTiming(): String
+
 @JsFun("(dataUrl, key) => { window.__qmFaceDetect(dataUrl, key); }")
 external fun faceDetectStart(dataUrl: String, key: String)
 
@@ -241,7 +250,7 @@ suspend fun bgCall(
 ): JsonObject? {
     bgCallSeq += 1
     val key = "bg:$bgCallSeq"
-    bgRemoveStartKeyed(dataUrl, key)
+    bgRemoveModnetStartKeyed(dataUrl, key)
     var waited = 0L
     while (waited < timeoutMs) {
         onProgress(bgProgress())
@@ -277,7 +286,7 @@ suspend fun passportCall(op: String, argsJson: String, timeoutMs: Long = 120_000
 
 private var fetchCallSeq = 0
 
-/** Fetches a same-origin resource (e.g. an outfit overlay PNG) as a data URL. */
+/** Fetches a same-origin resource (e.g. the app logo) as a data URL. */
 suspend fun fetchResourceDataUrl(url: String, timeoutMs: Long = 30_000): String? {
     fetchCallSeq += 1
     val key = "fetch:$fetchCallSeq"

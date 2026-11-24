@@ -4,8 +4,6 @@ import qrmaster.web.ui.ppFaceCoverage
 import qrmaster.web.ui.ppFaceCrop
 import qrmaster.web.ui.ppFaceCropSafe
 import qrmaster.web.ui.ppHeadBox
-import qrmaster.web.ui.ppOutfitRect
-import qrmaster.web.ui.ppOutfitRectInSource
 import qrmaster.web.ui.ppSheetLayout
 import kotlin.math.abs
 
@@ -200,25 +198,6 @@ fun main() {
         gcheck("mapping: headroom above face (5–35% of frame)",
             faceDstY / frameH in 0.05f..0.35f, "headroom=${faceDstY / frameH}")
         gcheck("mapping: isotropic (sx ≈ sy)", abs(sx - sy) < 0.02f, "sx=$sx sy=$sy")
-    }
-
-    // ── Outfit rect: output space → source space (Cut-out view) ──────────
-    run {
-        val crop = PPCrop(161f, 312f, 420f, 541f)
-        val r = ppOutfitRect(413, 531, 1f, 0f)
-        val rs = ppOutfitRectInSource(crop, r, 413, 531)
-        // The outfit artwork is wider than the photo frame by design (it
-        // bleeds off the edges and is clipped at render), so containment
-        // is NOT expected — exact fraction preservation is the contract:
-        // the Cut-out view must show the overlay exactly where the
-        // Result view (and the download) put it.
-        gcheck("outfit-in-source: fractions preserved",
-            gnear((rs.x - crop.x) / crop.w, r.x / 413f, 0.01f) && gnear((rs.w) / crop.w, r.w / 413f, 0.01f) &&
-                gnear((rs.y - crop.y) / crop.h, r.y / 531f, 0.01f) && gnear((rs.h) / crop.h, r.h / 531f, 0.01f),
-            "rs=$rs r=$r")
-        gcheck("outfit-in-source: centres aligned",
-            gnear(rs.x + rs.w / 2f, crop.x + crop.w / 2f, 1f),
-            "rs=$rs crop=$crop")
     }
 
     // ── Sheet counts the UI shows (Size tab text) ────────────────────────
