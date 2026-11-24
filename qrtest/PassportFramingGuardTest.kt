@@ -224,8 +224,11 @@ fun main() {
     // ── Sheet counts the UI shows (Size tab text) ────────────────────────
     run {
         val a4 = ppSheetLayout(210.0, 297.0, 35.0, 45.0)
-        gcheck("A4 + India 35×45 = 20 copies (4×5)",
-            a4.count == 20 && a4.cols == 4 && a4.rows == 5, "got ${a4.count} (${a4.cols}x${a4.rows})")
+        gcheck("A4 + India 35×45 = 30 copies (5×6)",
+            a4.count == 30 && a4.cols == 5 && a4.rows == 6, "got ${a4.count} (${a4.cols}x${a4.rows})")
+        val r4 = ppSheetLayout(152.4, 101.6, 35.0, 45.0)
+        gcheck("4R + India 35×45 = 8 copies (4×2)",
+            r4.count == 8 && r4.cols == 4 && r4.rows == 2, "got ${r4.count} (${r4.cols}x${r4.rows})")
         val letter = ppSheetLayout(215.9, 279.4, 35.0, 45.0)
         gcheck("Letter + India 35×45 = 25 copies (5×5)",
             letter.count == 25 && letter.cols == 5 && letter.rows == 5, "got ${letter.count}")

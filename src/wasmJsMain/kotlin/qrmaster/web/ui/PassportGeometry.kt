@@ -10,7 +10,9 @@ import kotlin.math.roundToInt
  * math can be unit-tested on the JVM — see qrtest/PassportGeometryTest.kt.
  *
  * The numbers mirror the Android app's PhotoLogic where the two overlap
- * (mm→px at 300 DPI, sheet margin 10 mm / gap 5 mm). Face framing is
+ * (mm→px at 300 DPI). Print sheets use a 4 mm margin / 1 mm gap so the
+ * standard studio counts fit (35×45 mm on 6×4 in paper = 8 copies).
+ * Face framing is
  * HEAD-based: the detector's box starts at the forehead, so it is first
  * expanded into a head box (crown above, chin below — see [ppHeadBox])
  * and the crop is sized so the crown→chin height is ≈ 64% of the crop
@@ -517,15 +519,24 @@ data class PPSheet(
     val paperPxW: Int, val paperPxH: Int, val photoPxW: Int, val photoPxH: Int
 )
 
+/** Default print-sheet edge margin (mm). 4 mm stays inside the
+ *  printable area of standard photo printers while letting the usual
+ *  studio grids fit (e.g. 4 cols of 35 mm on 152.4 mm paper). */
+const val PP_SHEET_MARGIN_MM = 4.0
+
+/** Default gap between copies on a print sheet (mm). */
+const val PP_SHEET_GAP_MM = 1.0
+
 /**
- * Grid of copies on a print paper at 300 DPI — same layout math as the
- * Android app (margin 10 mm, gap 5 mm by default, row-major positions).
- * Returns count 0 when even one copy does not fit.
+ * Grid of copies on a print paper at 300 DPI (row-major positions).
+ * Defaults are [PP_SHEET_MARGIN_MM] / [PP_SHEET_GAP_MM], which give
+ * the counts photo studios expect — 35×45 mm on 6×4 in (4R) paper is
+ * 8 copies (4 × 2). Returns count 0 when even one copy does not fit.
  */
 fun ppSheetLayout(
     paperWMm: Double, paperHMm: Double,
     photoWMm: Double, photoHMm: Double,
-    marginMm: Double = 10.0, gapMm: Double = 5.0,
+    marginMm: Double = PP_SHEET_MARGIN_MM, gapMm: Double = PP_SHEET_GAP_MM,
     dpi: Int = PASSPORT_DPI
 ): PPSheet {
     val paperW = ppMmToPx(paperWMm, dpi)
@@ -604,7 +615,16 @@ fun ppBackground(id: String): PPBackground? =
  * reference tool's AI outfit swap: a garment graphic laid over the
  * photo's torso, aligned by [ppOutfitRect] and adjustable by the user.
  */
-data class PPOutfit(val id: String, val name: String, val category: String, val path: String)
+/**
+ * [spanFrac] is the fraction of the artwork's width the drawn garment
+ * itself spans (measured from the PNGs' alpha silhouettes: the adult
+ * garments span ≈ 0.94 of the 1000 px-wide artwork, the children's
+ * ≈ 0.81). Placement math works in garment spans, so it needs this.
+ */
+data class PPOutfit(
+    val id: String, val name: String, val category: String, val path: String,
+    val spanFrac: Float = 0.94f
+)
 
 val PP_OUTFIT_CATEGORIES: List<String> = listOf("Men's", "Women's", "Children's")
 
@@ -615,8 +635,8 @@ val PP_OUTFITS: List<PPOutfit> = listOf(
     PPOutfit("women-black", "Black blazer", "Women's", "outfits/women-black.png"),
     PPOutfit("women-navy", "Navy blazer", "Women's", "outfits/women-navy.png"),
     PPOutfit("women-maroon", "Maroon blazer", "Women's", "outfits/women-maroon.png"),
-    PPOutfit("child-black", "Black suit & tie", "Children's", "outfits/child-black.png"),
-    PPOutfit("child-navy", "Navy blazer", "Children's", "outfits/child-navy.png")
+    PPOutfit("child-black", "Black suit & tie", "Children's", "outfits/child-black.png", spanFrac = 0.81f),
+    PPOutfit("child-navy", "Navy blazer", "Children's", "outfits/child-navy.png", spanFrac = 0.81f)
 )
 
 /** Overlay artwork aspect (width / height) — the PNGs are 1000 × 750. */
@@ -648,6 +668,59 @@ fun ppOutfitRect(frameW: Int, frameH: Int, scale: Float, yShift: Float): PPSheet
     val collarY = frameH * PP_OUTFIT_COLLAR_Y_FRAC + yShift.coerceIn(-0.1f, 0.1f) * frameH
     val x = (frameW - w) / 2f
     val y = collarY - PP_OUTFIT_COLLAR_FRAC * h
+    return PPSheetCell(x.roundToInt(), y.roundToInt(), w.roundToInt(), h.roundToInt())
+}
+
+/** Where the garment's top edge (shoulder line) sits inside the
+ *  artwork, as a fraction of its height — measured from the PNGs'
+ *  alpha silhouettes (topmost opaque row ≈ 0.265 for every template). */
+const val PP_OUTFIT_TOP_FRAC = 0.265f
+
+/** Garment span (shoulder-to-shoulder) as a multiple of the head-box
+ *  width. Shoulder breadth is ≈ 2× the ear-to-ear head width. */
+const val PP_OUTFIT_SPAN_K = 2.0f
+
+/** The garment's top edge lands this fraction of the frame height
+ *  BELOW the chin (head-box bottom) — the collar hugs the neck. */
+const val PP_OUTFIT_NECK_GAP_FRAC = 0.012f
+
+/**
+ * Face-anchored outfit placement in the rendered photo (output px).
+ * The garment is aligned to the PERSON, not the frame: its top edge
+ * sits just below the chin of the head box ([ppHeadBox] of [face],
+ * mapped from source px through [crop]), its span is
+ * [PP_OUTFIT_SPAN_K] × the head width, and it is centred on the face's
+ * centre. This keeps the collar on the neck and the shoulders covered
+ * whatever framing the photo ended up with — the fixed-fraction
+ * [ppOutfitRect] only lines up for one standard framing and drifts to
+ * mid-chest otherwise. [scale] / [yShift] remain user fine-tuning on
+ * top of the anchored placement. Falls back to [ppOutfitRect] when
+ * there is no usable face box.
+ */
+fun ppOutfitRectForPerson(
+    outW: Int, outH: Int, crop: PPCrop, face: PPRectF?,
+    spanFrac: Float, scale: Float, yShift: Float
+): PPSheetCell {
+    if (outW <= 0 || outH <= 0 || crop.w <= 0f || crop.h <= 0f ||
+        face == null || face.w <= 0f || face.h <= 0f
+    ) {
+        return ppOutfitRect(outW, outH, scale, yShift)
+    }
+    val head = ppHeadBox(face.x, face.y, face.w, face.h)
+    val sx = outW / crop.w
+    val sy = outH / crop.h
+    val headWOut = head.w * sx
+    if (headWOut <= 0f) return ppOutfitRect(outW, outH, scale, yShift)
+    val s = scale.coerceIn(0.7f, 1.4f)
+    val span = PP_OUTFIT_SPAN_K * headWOut * s
+    val w = span / spanFrac.coerceIn(0.5f, 1f)
+    val h = (w / PP_OUTFIT_ASPECT).toFloat()
+    val faceCxOut = ((face.x + face.w / 2f) - crop.x) * sx
+    val chinOut = ((head.y + head.h) - crop.y) * sy
+    val topEdgeY = chinOut + PP_OUTFIT_NECK_GAP_FRAC * outH +
+        yShift.coerceIn(-0.1f, 0.1f) * outH
+    val x = faceCxOut - w / 2f
+    val y = topEdgeY - PP_OUTFIT_TOP_FRAC * h
     return PPSheetCell(x.roundToInt(), y.roundToInt(), w.roundToInt(), h.roundToInt())
 }
 

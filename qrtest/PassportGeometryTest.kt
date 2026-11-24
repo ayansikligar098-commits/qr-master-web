@@ -123,31 +123,31 @@ fun main() {
     check("preview top", near(t.top, -fc.y * t.scale, 0.5f), "t=$t")
     check("preview img size", near(t.imgW, 3000f * t.scale, 1f) && near(t.imgH, 4000f * t.scale, 1f), "t=$t")
 
-    // ── Sheet layout (margin 10mm, gap 5mm — same as the Android app) ────
+    // ── Sheet layout (margin 4mm, gap 1mm — studio counts) ──────────────
     val s46 = ppSheetLayout(101.6, 152.4, 35.0, 45.0)
     check("4x6 paper px", s46.paperPxW == 1200 && s46.paperPxH == 1800, "sheet=$s46")
-    check("4x6 India grid 2x2 = 4", s46.cols == 2 && s46.rows == 2 && s46.count == 4, "sheet cols=${s46.cols} rows=${s46.rows} count=${s46.count}")
-    check("4x6 first cell at margin", s46.cells[0].x == ppMmToPx(10.0) && s46.cells[0].y == ppMmToPx(10.0), "cell=${s46.cells[0]}")
+    check("4x6 India grid 2x3 = 6", s46.cols == 2 && s46.rows == 3 && s46.count == 6, "sheet cols=${s46.cols} rows=${s46.rows} count=${s46.count}")
+    check("4x6 first cell at margin", s46.cells[0].x == ppMmToPx(4.0) && s46.cells[0].y == ppMmToPx(4.0), "cell=${s46.cells[0]}")
     check(
         "4x6 second cell offset by copy+gap",
-        s46.cells[1].x == ppMmToPx(10.0) + 413 + ppMmToPx(5.0) && s46.cells[1].y == ppMmToPx(10.0),
+        s46.cells[1].x == ppMmToPx(4.0) + 413 + ppMmToPx(1.0) && s46.cells[1].y == ppMmToPx(4.0),
         "cell=${s46.cells[1]}"
     )
     check(
         "4x6 all cells inside paper with margin",
-        s46.cells.all { it.x + it.w <= s46.paperPxW - ppMmToPx(10.0) + 1 && it.y + it.h <= s46.paperPxH - ppMmToPx(10.0) + 1 },
+        s46.cells.all { it.x + it.w <= s46.paperPxW - ppMmToPx(4.0) + 1 && it.y + it.h <= s46.paperPxH - ppMmToPx(4.0) + 1 },
         "sheet=$s46"
     )
     check("4x6 cell size = photo px", s46.cells.all { it.w == 413 && it.h == 531 }, "sheet=$s46")
 
     val sA4 = ppSheetLayout(210.0, 297.0, 35.0, 45.0)
-    check("A4 India grid 4x5 = 20", sA4.cols == 4 && sA4.rows == 5 && sA4.count == 20, "cols=${sA4.cols} rows=${sA4.rows} count=${sA4.count}")
+    check("A4 India grid 5x6 = 30", sA4.cols == 5 && sA4.rows == 6 && sA4.count == 30, "cols=${sA4.cols} rows=${sA4.rows} count=${sA4.count}")
 
     val sUs = ppSheetLayout(210.0, 297.0, 50.8, 50.8)
     check("A4 US grid 3x5 = 15", sUs.cols == 3 && sUs.rows == 5 && sUs.count == 15, "cols=${sUs.cols} rows=${sUs.rows} count=${sUs.count}")
 
     val sCa = ppSheetLayout(101.6, 152.4, 50.0, 70.0)
-    check("4x6 Canada grid 1x1 = 1", sCa.count == 1, "count=${sCa.count}")
+    check("4x6 Canada grid 1x2 = 2", sCa.count == 2, "count=${sCa.count}")
 
     val sBig = ppSheetLayout(101.6, 152.4, 100.0, 150.0)
     check("oversize photo fits 0 copies", sBig.count == 0 && sBig.cells.isEmpty(), "count=${sBig.count}")

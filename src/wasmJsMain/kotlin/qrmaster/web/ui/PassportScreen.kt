@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.foundation.layout.heightIn
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.jsonObject
@@ -126,8 +128,22 @@ private class PpModel {
     var outfitId by mutableStateOf<String?>(null)
     var outfitScale by mutableStateOf(1f)
     var outfitShift by mutableStateOf(0f)
+    var outfitRotate by mutableStateOf(0f)
     var outfitUrls by mutableStateOf<Map<String, String>>(emptyMap())
     var outfitLoading by mutableStateOf(false)
+
+    // Retouch adjustments (1 = neutral for the colour trio, 0 = off for
+    // sharpness). Applied by the shell render — the SAME op that produces
+    // the download — so the preview and the export cannot drift apart.
+    var rtBright by mutableStateOf(1f)
+    var rtContrast by mutableStateOf(1f)
+    var rtSaturation by mutableStateOf(1f)
+    var rtSharp by mutableStateOf(0f)
+
+    // The shell-rendered composite shown by the Result preview (exact
+    // export pixels), plus the input key it was rendered from.
+    var previewUrl by mutableStateOf("")
+    var previewKey by mutableStateOf("")
 
     var view by mutableStateOf(PPViewMode.Result)
     var tab by mutableStateOf(0)
@@ -143,6 +159,23 @@ private class PpModel {
     val bgDef: PPBackground
         get() = if (bgId == "custom") PPBackground("custom", "Custom", listOf(ppHex(customR, customG, customB)))
         else ppBackground(bgId) ?: PP_BG_CLASSICAL[2]
+
+    /** The detected face box as a rect (source px), for outfit anchoring. */
+    fun faceRectF(): PPRectF? = faceBox?.let { PPRectF(it[0], it[1], it[2], it[3]) }
+
+    /** The outfit's placement in the rendered photo — face-anchored. */
+    fun outfitRect(): PPSheetCell {
+        val o = PP_OUTFITS.firstOrNull { it.id == outfitId }
+        return ppOutfitRectForPerson(outW, outH, crop, faceRectF(), o?.spanFrac ?: 0.94f, outfitScale, outfitShift)
+    }
+
+    /** Key of everything that feeds the composite render; the Result
+     *  preview re-renders whenever it changes. */
+    fun previewRenderKey(): String = listOf(
+        cutoutUrl.hashCode(), crop, outW, outH, bgId, customR, customG, customB,
+        outfitId, outfitUrls[outfitId ?: ""], outfitScale, outfitShift, outfitRotate,
+        rtBright, rtContrast, rtSaturation, rtSharp
+    ).joinToString("|")
     val sheet: PPSheet?
         get() {
             val p = ppPaper(paperId)
@@ -177,8 +210,15 @@ private class PpModel {
         outfitId = null
         outfitScale = 1f
         outfitShift = 0f
+        outfitRotate = 0f
         outfitUrls = emptyMap()
         outfitLoading = false
+        rtBright = 1f
+        rtContrast = 1f
+        rtSaturation = 1f
+        rtSharp = 0f
+        previewUrl = ""
+        previewKey = ""
         view = PPViewMode.Result
         tab = 0
         cropOpen = false
@@ -223,7 +263,8 @@ private fun ppSessionJson(m: PpModel): String {
         "\"paperId\":\"${ppJsonEsc(m.paperId)}\",\"bgId\":\"${ppJsonEsc(m.bgId)}\"," +
         "\"customR\":${m.customR},\"customG\":${m.customG},\"customB\":${m.customB}," +
         "\"jpg\":${m.jpg},\"outfitId\":$outfitJson,\"outfitCat\":\"${ppJsonEsc(m.outfitCat)}\"," +
-        "\"outfitScale\":${m.outfitScale},\"outfitShift\":${m.outfitShift}," +
+        "\"outfitScale\":${m.outfitScale},\"outfitShift\":${m.outfitShift},\"outfitRotate\":${m.outfitRotate}," +
+        "\"rtB\":${m.rtBright},\"rtC\":${m.rtContrast},\"rtS\":${m.rtSaturation},\"rtSh\":${m.rtSharp}," +
         "\"view\":\"${m.view.name}\",\"tab\":${m.tab}}"
 }
 
@@ -232,8 +273,12 @@ private fun ppSaveSession(m: PpModel) {
     idbSave(PP_IDB_NAME, ppSessionJson(m))
 }
 
-/** Restores a session saved by [ppSaveSession]; lands in the Maker. */
+/** Restores a session saved by [ppSaveSession]; lands in the Maker.
+ *  Only ever applies to a FRESH landing — if the user has already
+ *  started new work by the time the saved JSON arrives, applying it
+ *  would slam stale settings (preset, paper, outfit…) over theirs. */
 private fun ppRestoreSession(m: PpModel, json: String): Boolean {
+    if (m.stage != PPStage.Landing || m.originalUrl.isNotBlank()) return false
     val root = try {
         toolsJson.parseToJsonElement(json).jsonObject
     } catch (e: Exception) {
@@ -275,6 +320,11 @@ private fun ppRestoreSession(m: PpModel, json: String): Boolean {
     m.outfitCat = root.asyncStr("outfitCat").ifBlank { PP_OUTFIT_CATEGORIES[0] }
     m.outfitScale = root.asyncStr("outfitScale").toFloatOrNull() ?: 1f
     m.outfitShift = root.asyncStr("outfitShift").toFloatOrNull() ?: 0f
+    m.outfitRotate = root.asyncStr("outfitRotate").toFloatOrNull() ?: 0f
+    m.rtBright = root.asyncStr("rtB").toFloatOrNull() ?: 1f
+    m.rtContrast = root.asyncStr("rtC").toFloatOrNull() ?: 1f
+    m.rtSaturation = root.asyncStr("rtS").toFloatOrNull() ?: 1f
+    m.rtSharp = root.asyncStr("rtSh").toFloatOrNull() ?: 0f
     m.view = if (root.asyncStr("view") == "Cutout") PPViewMode.Cutout
         else if (root.asyncStr("view") == "Original") PPViewMode.Original
         else PPViewMode.Result
@@ -478,43 +528,60 @@ private fun PpMaker(
     // Persist every maker change (debounced) so a discarded or reloaded
     // tab restores photo + settings exactly as they were.
     LaunchedEffect(
-        m.bgId, m.customR, m.customG, m.customB, m.outfitId, m.outfitScale, m.outfitShift,
+        m.bgId, m.customR, m.customG, m.customB, m.outfitId, m.outfitScale, m.outfitShift, m.outfitRotate,
+        m.rtBright, m.rtContrast, m.rtSaturation, m.rtSharp,
         m.paperId, m.presetId, m.customW, m.customH, m.crop, m.jpg, m.view, m.tab
     ) {
         delay(600)
         ppSaveSession(m)
     }
+    // The selected outfit's artwork must be loaded even if the outfit
+    // tab was never opened in this session (e.g. after a restore), or
+    // the preview and the download would silently drop it.
+    LaunchedEffect(m.outfitId) {
+        val o = PP_OUTFITS.firstOrNull { it.id == m.outfitId } ?: return@LaunchedEffect
+        if (o.id !in m.outfitUrls) {
+            val url = fetchResourceDataUrl(o.path)
+            if (url != null) m.outfitUrls = m.outfitUrls + (o.id to url)
+        }
+    }
     if (m.cropOpen) {
         PpCropEditor(m)
         return
     }
-    WhiteCard(Modifier.fillMaxWidth()) {
-        BoxWithConstraints(Modifier.padding(18.dp)) {
-            val wide = maxWidth >= 880.dp
-            if (wide) {
-                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        PpPreview(m)
-                        PpMakerActions(m, onNewPhoto)
+    // A compact, centred workspace — on wide screens the maker must not
+    // stretch edge to edge (the preview used to dominate the screen).
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.widthIn(max = 1080.dp)) {
+            WhiteCard(Modifier.fillMaxWidth()) {
+                BoxWithConstraints(Modifier.padding(18.dp)) {
+                    val wide = maxWidth >= 880.dp
+                    if (wide) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                PpPreview(m)
+                                PpMakerActions(m, onNewPhoto)
+                            }
+                            Column(Modifier.width(380.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                PpTabs(m, scope)
+                                PpDownload(state, m, scope)
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            PpPreview(m)
+                            PpMakerActions(m, onNewPhoto)
+                            PpTabs(m, scope)
+                            PpDownload(state, m, scope)
+                        }
                     }
-                    Column(Modifier.width(380.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        PpTabs(m, scope)
-                        PpDownload(state, m, scope)
-                    }
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PpPreview(m)
-                    PpMakerActions(m, onNewPhoto)
-                    PpTabs(m, scope)
-                    PpDownload(state, m, scope)
                 }
             }
+            if (m.note != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(m.note!!, fontSize = 12.5.sp, color = MutedText)
+            }
         }
-    }
-    if (m.note != null) {
-        Spacer(Modifier.height(10.dp))
-        Text(m.note!!, fontSize = 12.5.sp, color = MutedText)
     }
 }
 
@@ -535,6 +602,25 @@ private fun PpPreview(m: PpModel) {
         outfit?.let { m.outfitUrls[it.id] }?.let { decodeBitmapFromDataUrl(it) }
     }
 
+    // The Result preview shows the shell-rendered composite — the exact
+    // pixels the download produces (background, crop, outfit placement
+    // and rotation, retouch) — re-rendered (debounced) whenever any of
+    // its inputs change. Until the first render lands, the layered
+    // canvas draw below stands in.
+    val renderKey = m.previewRenderKey()
+    LaunchedEffect(renderKey) {
+        if (m.cutoutUrl.isBlank() || m.crop.w <= 0f || m.crop.h <= 0f) return@LaunchedEffect
+        delay(250)
+        val res = passportCall("renderPhoto", ppRenderArgsJson(m, "image/png"))
+        if (res != null && res.asyncOk() && res.asyncStr("dataUrl").isNotBlank()) {
+            m.previewUrl = res.asyncStr("dataUrl")
+            m.previewKey = renderKey
+        }
+    }
+    val compositeBmp = remember(m.previewUrl) {
+        if (m.previewUrl.isBlank()) null else decodeBitmapFromDataUrl(m.previewUrl)
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(PPViewMode.Result to "Result", PPViewMode.Cutout to "Cut-out", PPViewMode.Original to "Original").forEach { (mode, label) ->
@@ -551,7 +637,7 @@ private fun PpPreview(m: PpModel) {
             }
         }
         when (m.view) {
-            PPViewMode.Result -> PpResultPreview(m, cutoutBmp, outfitBmp)
+            PPViewMode.Result -> PpResultPreview(m, cutoutBmp, outfitBmp, compositeBmp)
             PPViewMode.Cutout -> PpCutoutPreview(m, cutoutBmp, outfitBmp)
             PPViewMode.Original -> PpOriginalPreview(m, originalBmp)
         }
@@ -563,51 +649,57 @@ private fun PpPreview(m: PpModel) {
 }
 
 @Composable
-private fun PpResultPreview(m: PpModel, cutoutBmp: ImageBitmap?, outfitBmp: ImageBitmap?) {
+private fun PpResultPreview(m: PpModel, cutoutBmp: ImageBitmap?, outfitBmp: ImageBitmap?, compositeBmp: ImageBitmap?) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val frameW = min(maxWidth.value, 430f)
+        // A normal passport-photo preview size — never a giant canvas:
+        // at most ~380 px wide and ~400 px tall on any screen.
+        val frameW = min(maxWidth.value, min(380f, (400.0 * m.aspect).toFloat()))
         val frameH = (frameW / m.aspect).toFloat()
         val bg = m.bgDef
         Box(
             Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp))
                 .border(1.dp, Color(0xFFDDD6F3), RoundedCornerShape(10.dp))
         ) {
-            // The preview draws the crop region into the frame with an
-            // explicit src→dst rect — the exact mapping the download
-            // render uses. (The previous offset+size Image layout did
-            // not hold in the web runtime: the bitmap filled the frame
-            // and the offset shifted the whole photo up, pushing the
-            // face out of the frame.)
             Canvas(Modifier.fillMaxSize()) {
-                if (bg.isGradient) {
-                    drawRect(Brush.verticalGradient(listOf(ppParseHex(bg.colors[0]), ppParseHex(bg.colors[1]))))
-                } else {
-                    drawRect(ppParseHex(bg.colors[0]))
-                }
-                if (cutoutBmp != null && m.crop.w > 0f && m.crop.h > 0f) {
+                if (compositeBmp != null) {
+                    // The exact export render (shell composite).
                     drawImage(
-                        image = cutoutBmp,
-                        srcOffset = IntOffset(m.crop.x.roundToInt(), m.crop.y.roundToInt()),
-                        srcSize = IntSize(m.crop.w.roundToInt().coerceAtLeast(1), m.crop.h.roundToInt().coerceAtLeast(1)),
+                        image = compositeBmp,
                         dstOffset = IntOffset.Zero,
                         dstSize = IntSize(size.width.roundToInt().coerceAtLeast(1), size.height.roundToInt().coerceAtLeast(1)),
                         filterQuality = FilterQuality.High
                     )
-                }
-                if (outfitBmp != null && m.outW > 0 && m.outH > 0) {
-                    val r = ppOutfitRect(m.outW, m.outH, m.outfitScale, m.outfitShift)
-                    drawImage(
-                        image = outfitBmp,
-                        dstOffset = IntOffset(
-                            (r.x.toFloat() / m.outW * size.width).roundToInt(),
-                            (r.y.toFloat() / m.outH * size.height).roundToInt()
-                        ),
-                        dstSize = IntSize(
-                            (r.w.toFloat() / m.outW * size.width).roundToInt().coerceAtLeast(1),
-                            (r.h.toFloat() / m.outH * size.height).roundToInt().coerceAtLeast(1)
-                        ),
-                        filterQuality = FilterQuality.High
-                    )
+                } else {
+                    if (bg.isGradient) {
+                        drawRect(Brush.verticalGradient(listOf(ppParseHex(bg.colors[0]), ppParseHex(bg.colors[1]))))
+                    } else {
+                        drawRect(ppParseHex(bg.colors[0]))
+                    }
+                    if (cutoutBmp != null && m.crop.w > 0f && m.crop.h > 0f) {
+                        drawImage(
+                            image = cutoutBmp,
+                            srcOffset = IntOffset(m.crop.x.roundToInt(), m.crop.y.roundToInt()),
+                            srcSize = IntSize(m.crop.w.roundToInt().coerceAtLeast(1), m.crop.h.roundToInt().coerceAtLeast(1)),
+                            dstOffset = IntOffset.Zero,
+                            dstSize = IntSize(size.width.roundToInt().coerceAtLeast(1), size.height.roundToInt().coerceAtLeast(1)),
+                            filterQuality = FilterQuality.High
+                        )
+                    }
+                    if (outfitBmp != null && m.outW > 0 && m.outH > 0) {
+                        val r = m.outfitRect()
+                        val ox = r.x.toFloat() / m.outW * size.width
+                        val oy = r.y.toFloat() / m.outH * size.height
+                        val ow = r.w.toFloat() / m.outW * size.width
+                        val oh = r.h.toFloat() / m.outH * size.height
+                        withTransform({ rotate(m.outfitRotate, Offset(ox + ow / 2f, oy + oh / 2f)) }) {
+                            drawImage(
+                                image = outfitBmp,
+                                dstOffset = IntOffset(ox.roundToInt(), oy.roundToInt()),
+                                dstSize = IntSize(ow.roundToInt().coerceAtLeast(1), oh.roundToInt().coerceAtLeast(1)),
+                                filterQuality = FilterQuality.High
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -622,9 +714,9 @@ private fun PpResultPreview(m: PpModel, cutoutBmp: ImageBitmap?, outfitBmp: Imag
 @Composable
 private fun PpCutoutPreview(m: PpModel, bmp: ImageBitmap?, outfitBmp: ImageBitmap?) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val frameW = min(maxWidth.value, 430f)
+        val frameW = min(maxWidth.value, 380f)
         val aspect = if (m.imgW > 0 && m.imgH > 0) m.imgW.toDouble() / m.imgH else 1.0
-        val frameH = (frameW / aspect).toFloat().coerceAtMost(520f)
+        val frameH = (frameW / aspect).toFloat().coerceAtMost(400f)
         Box(
             Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp))
                 .border(1.dp, Color(0xFFDDD6F3), RoundedCornerShape(10.dp))
@@ -655,14 +747,20 @@ private fun PpCutoutPreview(m: PpModel, bmp: ImageBitmap?, outfitBmp: ImageBitma
                         filterQuality = FilterQuality.High
                     )
                     if (outfitBmp != null && m.crop.w > 0f && m.outW > 0 && m.outH > 0) {
-                        val rOut = ppOutfitRect(m.outW, m.outH, m.outfitScale, m.outfitShift)
+                        val rOut = m.outfitRect()
                         val rs = ppOutfitRectInSource(m.crop, rOut, m.outW, m.outH)
-                        drawImage(
-                            image = outfitBmp,
-                            dstOffset = IntOffset((dx + rs.x * s).roundToInt(), (dy + rs.y * s).roundToInt()),
-                            dstSize = IntSize((rs.w * s).roundToInt().coerceAtLeast(1), (rs.h * s).roundToInt().coerceAtLeast(1)),
-                            filterQuality = FilterQuality.High
-                        )
+                        val oox = dx + rs.x * s
+                        val ooy = dy + rs.y * s
+                        val oow = rs.w * s
+                        val ooh = rs.h * s
+                        withTransform({ rotate(m.outfitRotate, Offset(oox + oow / 2f, ooy + ooh / 2f)) }) {
+                            drawImage(
+                                image = outfitBmp,
+                                dstOffset = IntOffset(oox.roundToInt(), ooy.roundToInt()),
+                                dstSize = IntSize(oow.roundToInt().coerceAtLeast(1), ooh.roundToInt().coerceAtLeast(1)),
+                                filterQuality = FilterQuality.High
+                            )
+                        }
                     }
                 }
             }
@@ -673,9 +771,9 @@ private fun PpCutoutPreview(m: PpModel, bmp: ImageBitmap?, outfitBmp: ImageBitma
 @Composable
 private fun PpFitPreview(bmp: androidx.compose.ui.graphics.ImageBitmap?, imgW: Int, imgH: Int, checker: Boolean) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val frameW = min(maxWidth.value, 430f)
+        val frameW = min(maxWidth.value, 380f)
         val aspect = if (imgW > 0 && imgH > 0) imgW.toDouble() / imgH else 1.0
-        val frameH = (frameW / aspect).toFloat().coerceAtMost(520f)
+        val frameH = (frameW / aspect).toFloat().coerceAtMost(400f)
         Box(
             Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp))
                 .border(1.dp, Color(0xFFDDD6F3), RoundedCornerShape(10.dp))
@@ -708,9 +806,9 @@ private fun PpFitPreview(bmp: androidx.compose.ui.graphics.ImageBitmap?, imgW: I
 @Composable
 private fun PpOriginalPreview(m: PpModel, bmp: androidx.compose.ui.graphics.ImageBitmap?) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val frameW = min(maxWidth.value, 430f)
+        val frameW = min(maxWidth.value, 380f)
         val aspect = if (m.imgW > 0 && m.imgH > 0) m.imgW.toDouble() / m.imgH else 1.0
-        val frameH = (frameW / aspect).toFloat().coerceAtMost(520f)
+        val frameH = (frameW / aspect).toFloat().coerceAtMost(400f)
         Box(
             Modifier.size(frameW.dp, frameH.dp).clip(RoundedCornerShape(10.dp))
                 .background(Color(0xFFF1EFFD))
@@ -736,7 +834,7 @@ private fun PpOriginalPreview(m: PpModel, bmp: androidx.compose.ui.graphics.Imag
 private fun PpTabs(m: PpModel, scope: CoroutineScope) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Size", "Background", "Change outfit").forEachIndexed { i, label ->
+            listOf("Size", "Background", "Change outfit", "Retouch").forEachIndexed { i, label ->
                 FilterChip(
                     selected = m.tab == i,
                     onClick = { m.tab = i },
@@ -752,7 +850,8 @@ private fun PpTabs(m: PpModel, scope: CoroutineScope) {
         when (m.tab) {
             0 -> PpSizeTab(m)
             1 -> PpBackgroundTab(m)
-            else -> PpOutfitTab(m, scope)
+            2 -> PpOutfitTab(m, scope)
+            else -> PpRetouchTab(m)
         }
     }
 }
@@ -776,7 +875,7 @@ private fun PpSizeTab(m: PpModel) {
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth()
         )
-        LazyColumn(Modifier.fillMaxWidth().height(238.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        LazyColumn(Modifier.fillMaxWidth().height(200.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             item {
                 Text("Common", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MutedText)
                 Spacer(Modifier.height(4.dp))
@@ -1015,12 +1114,40 @@ private fun PpOutfitTab(m: PpModel, scope: CoroutineScope) {
                 Slider(value = m.outfitScale, onValueChange = { m.outfitScale = it; m.view = PPViewMode.Result }, valueRange = 0.8f..1.3f)
                 Text("Outfit position", fontSize = 12.5.sp, color = MutedText)
                 Slider(value = m.outfitShift, onValueChange = { m.outfitShift = it; m.view = PPViewMode.Result }, valueRange = -0.08f..0.08f)
+                Text("Outfit rotation: ${m.outfitRotate.roundToInt()}°", fontSize = 12.5.sp, color = MutedText)
+                Slider(value = m.outfitRotate, onValueChange = { m.outfitRotate = it; m.view = PPViewMode.Result }, valueRange = -15f..15f)
             }
         }
         Text(
-            "Outfits are artwork templates placed over your photo. Pick one, then use the size and position sliders so it sits naturally on the shoulders.",
+            "Outfits are artwork templates placed over your photo. The outfit is aligned to the shoulders automatically using the detected face — use the size, position and rotation sliders to fine-tune it.",
             fontSize = 11.5.sp, color = MutedText
         )
+    }
+}
+
+@Composable
+private fun PpRetouchTab(m: PpModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        PpAdjustSlider("Brightness", m.rtBright, 0.5f..1.5f) { m.rtBright = it; m.view = PPViewMode.Result }
+        PpAdjustSlider("Contrast", m.rtContrast, 0.5f..1.5f) { m.rtContrast = it; m.view = PPViewMode.Result }
+        PpAdjustSlider("Saturation", m.rtSaturation, 0.5f..1.5f) { m.rtSaturation = it; m.view = PPViewMode.Result }
+        PpAdjustSlider("Sharpness", m.rtSharp, 0f..1f) { m.rtSharp = it; m.view = PPViewMode.Result }
+        OutlinedButton(onClick = {
+            m.rtBright = 1f; m.rtContrast = 1f; m.rtSaturation = 1f; m.rtSharp = 0f
+            m.view = PPViewMode.Result
+        }) { Text("Reset adjustments", fontSize = 13.sp) }
+        Text(
+            "Adjustments are applied to the photo itself — what you see in the preview is exactly what downloads.",
+            fontSize = 11.5.sp, color = MutedText
+        )
+    }
+}
+
+@Composable
+private fun PpAdjustSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("$label: ${(value * 100).roundToInt()}%", fontSize = 12.5.sp, color = MutedText)
+        Slider(value = value, onValueChange = onChange, valueRange = range)
     }
 }
 
@@ -1058,27 +1185,38 @@ private fun PpDownload(state: AppState, m: PpModel, scope: CoroutineScope) {
     }
 }
 
+/**
+ * The ONE argument builder for the shell's renderPhoto op — used by the
+ * Result preview AND by the download, so both render identical pixels
+ * (background, crop, face-anchored outfit + rotation, retouch).
+ */
+private fun ppRenderArgsJson(m: PpModel, mime: String): String {
+    val bg = m.bgDef
+    val bgJson = if (bg.isGradient) {
+        "\"bgGrad\":[\"${bg.colors[0]}\",\"${bg.colors[1]}\"]"
+    } else {
+        "\"bg\":\"${bg.colors[0]}\""
+    }
+    val outfit = PP_OUTFITS.firstOrNull { it.id == m.outfitId }
+    val outfitUrl = outfit?.let { m.outfitUrls[it.id] }
+    val outfitJson = if (outfit != null && outfitUrl != null) {
+        val r = m.outfitRect()
+        ",\"outfit\":\"$outfitUrl\",\"outfitX\":${r.x},\"outfitY\":${r.y},\"outfitW\":${r.w},\"outfitH\":${r.h},\"outfitRotate\":${m.outfitRotate}"
+    } else ""
+    return "{\"dataUrl\":\"${m.cutoutUrl}\",\"cropX\":${m.crop.x},\"cropY\":${m.crop.y}," +
+        "\"cropW\":${m.crop.w},\"cropH\":${m.crop.h},\"outW\":${m.outW},\"outH\":${m.outH}," +
+        "$bgJson$outfitJson,\"brightness\":${m.rtBright},\"contrast\":${m.rtContrast}," +
+        "\"saturation\":${m.rtSaturation},\"sharpness\":${m.rtSharp}," +
+        "\"mime\":\"$mime\",\"quality\":0.92}"
+}
+
 private suspend fun ppDownload(state: AppState, m: PpModel) {
     m.busy = true
     m.dlError = null
     try {
         val mime = if (m.jpg) "image/jpeg" else "image/png"
         val ext = if (m.jpg) "jpg" else "png"
-        val bg = m.bgDef
-        val bgJson = if (bg.isGradient) {
-            "\"bgGrad\":[\"${bg.colors[0]}\",\"${bg.colors[1]}\"]"
-        } else {
-            "\"bg\":\"${bg.colors[0]}\""
-        }
-        val outfit = PP_OUTFITS.firstOrNull { it.id == m.outfitId }
-        val outfitUrl = outfit?.let { m.outfitUrls[it.id] }
-        val outfitJson = if (outfit != null && outfitUrl != null) {
-            val r = ppOutfitRect(m.outW, m.outH, m.outfitScale, m.outfitShift)
-            ",\"outfit\":\"$outfitUrl\",\"outfitX\":${r.x},\"outfitY\":${r.y},\"outfitW\":${r.w},\"outfitH\":${r.h}"
-        } else ""
-        val args = "{\"dataUrl\":\"${m.cutoutUrl}\",\"cropX\":${m.crop.x},\"cropY\":${m.crop.y}," +
-            "\"cropW\":${m.crop.w},\"cropH\":${m.crop.h},\"outW\":${m.outW},\"outH\":${m.outH}," +
-            "$bgJson$outfitJson,\"mime\":\"$mime\",\"quality\":0.92}"
+        val args = ppRenderArgsJson(m, mime)
         val res = passportCall("renderPhoto", args)
         if (res == null || !res.asyncOk()) {
             m.dlError = res?.asyncError() ?: "Rendering timed out. Please try again."

@@ -1264,19 +1264,162 @@
     };
 
     // ── Passport Photo Maker ops (per-call async keys) ───────────────────
-    // Brightness/contrast over raw RGBA bytes. One shared formula with the
-    // Compose preview's colour matrix:
+    // Retouch over raw RGBA bytes, applied to the composited photo in the
+    // render op itself — the preview and the download are the same op, so
+    // they cannot drift apart. Per pixel: saturation mix around the Rec601
+    // luma, then brightness/contrast:
     //   out = clamp(((v/255 - 0.5) * contrast + 0.5 + (brightness - 1)) * 255)
-    function qmAdjustPixels(data, brightness, contrast) {
+    function qmAdjustPixels(data, brightness, contrast, saturation) {
         var b = (brightness == null ? 1 : brightness) - 1;
         var c = (contrast == null ? 1 : contrast);
-        if (b === 0 && c === 1) return;
+        var s = (saturation == null ? 1 : saturation);
+        if (b === 0 && c === 1 && s === 1) return;
         for (var i = 0; i < data.length; i += 4) {
-            for (var j = 0; j < 3; j++) {
-                var v = (data[i + j] / 255 - 0.5) * c + 0.5 + b;
-                data[i + j] = v < 0 ? 0 : (v > 1 ? 255 : Math.round(v * 255));
+            var r = data[i], g = data[i + 1], bl = data[i + 2];
+            if (s !== 1) {
+                var luma = 0.299 * r + 0.587 * g + 0.114 * bl;
+                r = luma + (r - luma) * s;
+                g = luma + (g - luma) * s;
+                bl = luma + (bl - luma) * s;
+            }
+            data[i] = qmAdjChan(r, b, c);
+            data[i + 1] = qmAdjChan(g, b, c);
+            data[i + 2] = qmAdjChan(bl, b, c);
+        }
+    }
+    function qmAdjChan(v255, b, c) {
+        var v = (v255 / 255 - 0.5) * c + 0.5 + b;
+        return v < 0 ? 0 : (v > 1 ? 255 : Math.round(v * 255));
+    }
+    // 3x3 sharpening convolution; amount 0..1 (0 = off). Kernel centre
+    // 1 + 4a, edge neighbours -a — a standard unsharp-style kernel.
+    function qmSharpen(ctx, w, h, amount) {
+        if (!(amount > 0) || w < 3 || h < 3) return;
+        var src = ctx.getImageData(0, 0, w, h);
+        var d = src.data;
+        var out = new Uint8ClampedArray(d);
+        var a = amount;
+        for (var y = 1; y < h - 1; y++) {
+            for (var x = 1; x < w - 1; x++) {
+                var idx = (y * w + x) * 4;
+                for (var ch = 0; ch < 3; ch++) {
+                    var v = d[idx + ch] * (1 + 4 * a)
+                        - a * (d[idx - 4 + ch] + d[idx + 4 + ch] + d[idx - w * 4 + ch] + d[idx + w * 4 + ch]);
+                    out[idx + ch] = v < 0 ? 0 : (v > 255 ? 255 : v);
+                }
             }
         }
+        src.data.set(out);
+        ctx.putImageData(src, 0, 0);
+    }
+    // ── 300 DPI metadata ─────────────────────────────────────────────────
+    // Canvas encoders do not stamp print density, so exported files only
+    // had 300-DPI pixel DIMENSIONS. These helpers rewrite the density
+    // fields in the encoded bytes: PNG pHYs chunk (11811 px/m) and the
+    // JPEG JFIF APP0 density (300 x 300, unit = inch).
+    var qmCrcTable = null;
+    function qmCrc32(bytes, start, len) {
+        if (!qmCrcTable) {
+            qmCrcTable = new Int32Array(256);
+            for (var n = 0; n < 256; n++) {
+                var cc = n;
+                for (var k = 0; k < 8; k++) cc = (cc & 1) ? (0xEDB88320 ^ (cc >>> 1)) : (cc >>> 1);
+                qmCrcTable[n] = cc;
+            }
+        }
+        var crc = 0xFFFFFFFF;
+        for (var i = start; i < start + len; i++) {
+            crc = qmCrcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+        }
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+    function qmDataUrlToBytes(dataUrl) {
+        var b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        var bin = atob(b64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes;
+    }
+    function qmBytesToDataUrl(bytes, mime) {
+        var bin = '';
+        var CH = 0x8000;
+        for (var i = 0; i < bytes.length; i += CH) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+        }
+        return 'data:' + mime + ';base64,' + btoa(bin);
+    }
+    function qmSetDpi300(dataUrl, mime) {
+        try {
+            var bytes = qmDataUrlToBytes(dataUrl);
+            if (mime === 'image/png' && bytes.length > 40 &&
+                bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+                // Scan chunks for an existing pHYs; patch it if present.
+                var off = 8;
+                var patched = false;
+                while (off + 12 <= bytes.length) {
+                    var len = ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
+                    var type = String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
+                    if (type === 'pHYs' && len === 9) {
+                        var ppm = 11811;
+                        bytes[off + 8] = (ppm >>> 24) & 255; bytes[off + 9] = (ppm >>> 16) & 255;
+                        bytes[off + 10] = (ppm >>> 8) & 255; bytes[off + 11] = ppm & 255;
+                        bytes[off + 12] = (ppm >>> 24) & 255; bytes[off + 13] = (ppm >>> 16) & 255;
+                        bytes[off + 14] = (ppm >>> 8) & 255; bytes[off + 15] = ppm & 255;
+                        bytes[off + 16] = 1;
+                        var crc = qmCrc32(bytes, off + 4, 4 + 9);
+                        bytes[off + 17] = (crc >>> 24) & 255; bytes[off + 18] = (crc >>> 16) & 255;
+                        bytes[off + 19] = (crc >>> 8) & 255; bytes[off + 20] = crc & 255;
+                        patched = true;
+                        break;
+                    }
+                    if (type === 'IDAT' || type === 'IEND') break;
+                    off += 12 + len;
+                }
+                if (!patched) {
+                    // Insert a fresh pHYs right after IHDR (offset 33).
+                    var chunk = new Uint8Array(21);
+                    var ppmv = 11811;
+                    chunk[3] = 9;
+                    chunk[4] = 0x70; chunk[5] = 0x48; chunk[6] = 0x59; chunk[7] = 0x73; // pHYs
+                    chunk[8] = (ppmv >>> 24) & 255; chunk[9] = (ppmv >>> 16) & 255;
+                    chunk[10] = (ppmv >>> 8) & 255; chunk[11] = ppmv & 255;
+                    chunk[12] = chunk[8]; chunk[13] = chunk[9]; chunk[14] = chunk[10]; chunk[15] = chunk[11];
+                    chunk[16] = 1;
+                    var crc2 = qmCrc32(chunk, 4, 13);
+                    chunk[17] = (crc2 >>> 24) & 255; chunk[18] = (crc2 >>> 16) & 255;
+                    chunk[19] = (crc2 >>> 8) & 255; chunk[20] = crc2 & 255;
+                    var out = new Uint8Array(bytes.length + chunk.length);
+                    out.set(bytes.subarray(0, 33), 0);
+                    out.set(chunk, 33);
+                    out.set(bytes.subarray(33), 33 + chunk.length);
+                    bytes = out;
+                }
+                return qmBytesToDataUrl(bytes, mime);
+            }
+            if ((mime === 'image/jpeg' || mime === 'image/jpg') && bytes.length > 20 &&
+                bytes[0] === 0xFF && bytes[1] === 0xD8) {
+                if (bytes[2] === 0xFF && bytes[3] === 0xE0 &&
+                    bytes[6] === 0x4A && bytes[7] === 0x46 && bytes[8] === 0x49 && bytes[9] === 0x46) {
+                    // JFIF APP0 layout from file start: SOI(2) marker(2)
+                    // length(2) "JFIF\0"(5) version(2) → units at 13,
+                    // Xdensity at 14-15, Ydensity at 16-17.
+                    bytes[13] = 1;
+                    bytes[14] = 300 >>> 8; bytes[15] = 300 & 255;
+                    bytes[16] = 300 >>> 8; bytes[17] = 300 & 255;
+                } else {
+                    // No JFIF header — insert a minimal APP0 after SOI.
+                    var app0 = new Uint8Array([0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00,
+                        0x01, 0x01, 0x01, 0x01, 0x2C, 0x01, 0x2C, 0x00, 0x00]);
+                    var out2 = new Uint8Array(bytes.length + app0.length);
+                    out2.set(bytes.subarray(0, 2), 0);
+                    out2.set(app0, 2);
+                    out2.set(bytes.subarray(2), 2 + app0.length);
+                    bytes = out2;
+                }
+                return qmBytesToDataUrl(bytes, mime);
+            }
+        } catch (e) { /* density is best-effort; never fail a render over it */ }
+        return dataUrl;
     }
     window.__qmPassportOp = function (op, argsJson, key) {
         window.__qmAsync[key] = '';
@@ -1298,17 +1441,34 @@
                     ctx.drawImage(img, args.cropX, args.cropY, args.cropW, args.cropH, 0, 0, args.outW, args.outH);
                     if (args.outfit) {
                         var outfitImg = await qmLoadImage(args.outfit);
-                        ctx.drawImage(outfitImg, args.outfitX || 0, args.outfitY || 0, args.outfitW || cv.width, args.outfitH || cv.height);
+                        var oX = args.outfitX || 0, oY = args.outfitY || 0;
+                        var oW = args.outfitW || cv.width, oH = args.outfitH || cv.height;
+                        var rot = args.outfitRotate || 0;
+                        if (rot) {
+                            // Rotate about the outfit rect's centre — the
+                            // same pivot the Compose preview uses.
+                            ctx.save();
+                            ctx.translate(oX + oW / 2, oY + oH / 2);
+                            ctx.rotate(rot * Math.PI / 180);
+                            ctx.drawImage(outfitImg, -oW / 2, -oH / 2, oW, oH);
+                            ctx.restore();
+                        } else {
+                            ctx.drawImage(outfitImg, oX, oY, oW, oH);
+                        }
                     }
                     if ((args.brightness != null && args.brightness !== 1) ||
-                        (args.contrast != null && args.contrast !== 1)) {
+                        (args.contrast != null && args.contrast !== 1) ||
+                        (args.saturation != null && args.saturation !== 1)) {
                         var id = ctx.getImageData(0, 0, cv.width, cv.height);
-                        qmAdjustPixels(id.data, args.brightness, args.contrast);
+                        qmAdjustPixels(id.data, args.brightness, args.contrast, args.saturation);
                         ctx.putImageData(id, 0, 0);
+                    }
+                    if (args.sharpness != null && args.sharpness > 0) {
+                        qmSharpen(ctx, cv.width, cv.height, args.sharpness);
                     }
                     qmSetAsync(key, {
                         ok: true,
-                        dataUrl: cv.toDataURL(args.mime || 'image/png', args.quality || 0.92),
+                        dataUrl: qmSetDpi300(cv.toDataURL(args.mime || 'image/png', args.quality || 0.92), args.mime || 'image/png'),
                         w: args.outW, h: args.outH
                     });
                 } else if (op === 'renderSheet') {
@@ -1328,7 +1488,7 @@
                     }
                     qmSetAsync(key, {
                         ok: true,
-                        dataUrl: sc.toDataURL(args.mime || 'image/jpeg', args.quality || 0.92),
+                        dataUrl: qmSetDpi300(sc.toDataURL(args.mime || 'image/jpeg', args.quality || 0.92), args.mime || 'image/jpeg'),
                         w: args.paperW, h: args.paperH, count: cells.length
                     });
                 } else {

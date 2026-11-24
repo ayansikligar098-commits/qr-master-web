@@ -1,15 +1,20 @@
 import qrmaster.web.ui.PASSPORT_COMMON
 import qrmaster.web.ui.PASSPORT_COUNTRIES
 import qrmaster.web.ui.PPCrop
+import qrmaster.web.ui.PPRectF
 import qrmaster.web.ui.PP_BG_CLASSICAL
 import qrmaster.web.ui.PP_BG_STYLISH
 import qrmaster.web.ui.PP_OUTFITS
+import qrmaster.web.ui.PP_OUTFIT_TOP_FRAC
 import qrmaster.web.ui.PP_PAPER_OPTIONS
 import qrmaster.web.ui.ppBackground
 import qrmaster.web.ui.ppCropMove
 import qrmaster.web.ui.ppCropResize
+import qrmaster.web.ui.ppFaceCrop
+import qrmaster.web.ui.ppHeadBox
 import qrmaster.web.ui.ppMmToPx
 import qrmaster.web.ui.ppOutfitRect
+import qrmaster.web.ui.ppOutfitRectForPerson
 import qrmaster.web.ui.ppPaper
 import qrmaster.web.ui.ppPreset
 import qrmaster.web.ui.ppPxToMm
@@ -72,15 +77,25 @@ fun main() {
     mcheck("Legal px 2550x4200", ppPaper("legal").let { ppMmToPx(it.wMm) == 2550 && ppMmToPx(it.hMm) == 4200 })
 
     val s4r = ppSheetLayout(152.4, 101.6, 35.0, 45.0)
-    mcheck("4R India sheet = 3 copies (3x1)", s4r.count == 3 && s4r.cols == 3 && s4r.rows == 1, "got ${s4r.count} (${s4r.cols}x${s4r.rows})")
+    mcheck("4R India sheet = 8 copies (4x2)", s4r.count == 8 && s4r.cols == 4 && s4r.rows == 2, "got ${s4r.count} (${s4r.cols}x${s4r.rows})")
+    mcheck(
+        "4R cells inside paper with margin",
+        s4r.cells.all { it.x >= ppMmToPx(4.0) - 1 && it.y >= ppMmToPx(4.0) - 1 &&
+            it.x + it.w <= s4r.paperPxW - ppMmToPx(4.0) + 1 && it.y + it.h <= s4r.paperPxH - ppMmToPx(4.0) + 1 },
+        "sheet=$s4r"
+    )
     val sA5 = ppSheetLayout(148.5, 210.0, 35.0, 45.0)
-    mcheck("A5 India sheet = 9 copies (3x3)", sA5.count == 9 && sA5.cols == 3 && sA5.rows == 3, "got ${sA5.count} (${sA5.cols}x${sA5.rows})")
+    mcheck("A5 India sheet = 12 copies (3x4)", sA5.count == 12 && sA5.cols == 3 && sA5.rows == 4, "got ${sA5.count} (${sA5.cols}x${sA5.rows})")
     val sLetter = ppSheetLayout(215.9, 279.4, 35.0, 45.0)
     mcheck("Letter India sheet = 25 copies (5x5)", sLetter.count == 25 && sLetter.cols == 5 && sLetter.rows == 5, "got ${sLetter.count} (${sLetter.cols}x${sLetter.rows})")
+    val s3r = ppSheetLayout(88.9, 127.0, 35.0, 45.0)
+    mcheck("3R India sheet = 4 copies (2x2)", s3r.count == 4 && s3r.cols == 2 && s3r.rows == 2, "got ${s3r.count} (${s3r.cols}x${s3r.rows})")
+    val s5r = ppSheetLayout(177.8, 127.0, 35.0, 45.0)
+    mcheck("5R India sheet = 8 copies (4x2)", s5r.count == 8 && s5r.cols == 4 && s5r.rows == 2, "got ${s5r.count} (${s5r.cols}x${s5r.rows})")
     val sLegalCa = ppSheetLayout(215.9, 355.6, 50.0, 70.0)
     mcheck(
-        "Legal Canada cells inside paper",
-        sLegalCa.count > 0 && sLegalCa.cells.all { it.x + it.w <= sLegalCa.paperPxW && it.y + it.h <= sLegalCa.paperPxH },
+        "Legal Canada = 16 copies, cells inside paper",
+        sLegalCa.count == 16 && sLegalCa.cells.all { it.x + it.w <= sLegalCa.paperPxW && it.y + it.h <= sLegalCa.paperPxH },
         "count=${sLegalCa.count}"
     )
 
@@ -117,6 +132,64 @@ fun main() {
     mcheck("outfit yShift moves it down", rShift.y > r.y, "got ${rShift.y} vs ${r.y}")
     val rUs = ppOutfitRect(600, 600, 1f, 0f)
     mcheck("outfit US frame keeps aspect", mnearD(rUs.w.toDouble() / rUs.h, 4.0 / 3.0, 0.01), "got ${rUs.w}x${rUs.h}")
+
+    // ── Face-anchored outfit placement ───────────────────────────────────
+    // Standard framing: 3000x4000 photo, face (1200,800,600,600), India out.
+    val aCrop = ppFaceCrop(3000, 4000, 35.0 / 45.0, 1200f, 800f, 600f, 600f)
+    val aFace = PPRectF(1200f, 800f, 600f, 600f)
+    val aHead = ppHeadBox(1200f, 800f, 600f, 600f)
+    val anchored = ppOutfitRectForPerson(413, 531, aCrop, aFace, 0.94f, 1f, 0f)
+    val headWOut = aHead.w * (413f / aCrop.w)
+    val chinOut = ((aHead.y + aHead.h) - aCrop.y) * (531f / aCrop.h)
+    mcheck(
+        "anchored garment span = 2x head width",
+        mnear((0.94f * anchored.w), 2f * headWOut, 6f),
+        "span=${0.94f * anchored.w} headWOut=$headWOut rect=$anchored"
+    )
+    mcheck(
+        "anchored garment top sits just below chin",
+        mnear(anchored.y + PP_OUTFIT_TOP_FRAC * anchored.h, chinOut + 0.012f * 531f, 3f),
+        "top=${anchored.y + PP_OUTFIT_TOP_FRAC * anchored.h} chin=$chinOut rect=$anchored"
+    )
+    mcheck(
+        "anchored outfit centred on face centre",
+        mnear(anchored.x + anchored.w / 2f, (1500f - aCrop.x) * (413f / aCrop.w), 3f),
+        "rect=$anchored"
+    )
+    mcheck("anchored outfit covers frame bottom", anchored.y + anchored.h >= 531, "rect=$anchored")
+    // Same face, crop window moved DOWN 200 source px (chin rides higher
+    // in the frame): the garment must follow the chin UP by 200*sy.
+    val cropLower = PPCrop(aCrop.x, aCrop.y + 200f, aCrop.w, aCrop.h)
+    val anchoredLower = ppOutfitRectForPerson(413, 531, cropLower, aFace, 0.94f, 1f, 0f)
+    mcheck(
+        "anchored outfit follows chin when crop moves",
+        mnear((anchored.y - anchoredLower.y).toFloat(), 200f * (531f / aCrop.h), 4f),
+        "dy=${anchored.y - anchoredLower.y} expected=${200f * (531f / aCrop.h)}"
+    )
+    // Off-centre face: garment centre follows the face, not the frame.
+    val offCrop = ppFaceCrop(3000, 4000, 35.0 / 45.0, 300f, 800f, 600f, 600f)
+    val offAnchored = ppOutfitRectForPerson(413, 531, offCrop, PPRectF(300f, 800f, 600f, 600f), 0.94f, 1f, 0f)
+    mcheck(
+        "anchored outfit follows off-centre face",
+        mnear(offAnchored.x + offAnchored.w / 2f, (600f - offCrop.x) * (413f / offCrop.w), 3f),
+        "rect=$offAnchored crop=$offCrop"
+    )
+    // Children's artwork is narrower (spanFrac 0.81) → wider rect for the
+    // same garment span.
+    val childAnchored = ppOutfitRectForPerson(413, 531, aCrop, aFace, 0.81f, 1f, 0f)
+    mcheck(
+        "child outfit rect wider for same span",
+        mnear((0.81f * childAnchored.w), 2f * headWOut, 6f) && childAnchored.w > anchored.w,
+        "child=$childAnchored adult=$anchored"
+    )
+    // No face → exact fallback to the frame-fraction placement.
+    val noFace = ppOutfitRectForPerson(413, 531, aCrop, null, 0.94f, 1f, 0f)
+    val fallback = ppOutfitRect(413, 531, 1f, 0f)
+    mcheck(
+        "anchored falls back without a face",
+        noFace.x == fallback.x && noFace.y == fallback.y && noFace.w == fallback.w && noFace.h == fallback.h,
+        "got $noFace vs $fallback"
+    )
 
     // ── Crop move / resize ───────────────────────────────────────────────
     val base = PPCrop(200f, 200f, 350f, 450f) // 35:45 aspect in a 1000x1200 photo
