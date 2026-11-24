@@ -95,8 +95,6 @@ import qrmaster.web.data.claimAutoTask
 import qrmaster.web.data.loadTasks
 import qrmaster.web.data.markLinkOpened
 import qrmaster.web.data.myRequests
-import qrmaster.web.data.submitCreditRequest
-import qrmaster.web.data.submitPlanRequest
 import qrmaster.web.data.submitTaskProof
 import qrmaster.web.data.withdraw
 import qrmaster.web.data.HistoryItem
@@ -2685,7 +2683,7 @@ fun SettingsScreen(state: AppState) {
     }
 }
 
-/* ---------------- 9) Premium (app prices, UPI/UTR flow, My Requests) ---------------- */
+/* ---------------- 9) Premium (app prices, online payment, My Requests) ---------------- */
 
 @Composable
 fun PremiumScreen(state: AppState) {
@@ -2707,7 +2705,6 @@ fun PremiumScreen(state: AppState) {
     val prices = cfg?.prices ?: mapOf("1m" to 99, "3m" to 249, "6m" to 449, "1y" to 849)
     val planCredits = cfg?.planCredits ?: mapOf("1m" to 100, "3m" to 300, "6m" to 600, "1y" to 1200)
     val packs = cfg?.creditPacks ?: listOf(50 to 49, 120 to 99, 300 to 199)
-    val upiId = cfg?.upiId ?: "ayansikligar@slc"
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -2936,7 +2933,6 @@ fun PremiumScreen(state: AppState) {
             state = state,
             planKey = plan,
             basePrice = prices[plan] ?: 0,
-            upiId = upiId,
             onClose = { buyPlan = null },
             onDone = { buyPlan = null; reloadRequests() }
         )
@@ -2947,7 +2943,6 @@ fun PremiumScreen(state: AppState) {
             state = state,
             packCredits = pack.first,
             packPrice = pack.second,
-            upiId = upiId,
             onClose = { buyPack = null },
             onDone = { buyPack = null; reloadRequests() }
         )
@@ -2959,7 +2954,6 @@ private fun PremiumBuyDialog(
     state: AppState,
     planKey: String,
     basePrice: Int,
-    upiId: String,
     onClose: () -> Unit,
     onDone: () -> Unit
 ) {
@@ -2968,15 +2962,11 @@ private fun PremiumBuyDialog(
     var coupon by remember { mutableStateOf<qrmaster.web.data.CouponOutcome.Ok?>(null) }
     var couponMsg by remember { mutableStateOf<String?>(null) }
     var couponBusy by remember { mutableStateOf(false) }
-    var utr by remember { mutableStateOf("") }
-    var shotB64 by remember { mutableStateOf<String?>(null) }
-    var shotName by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
     var rzpBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun payOnline() {
-        if (rzpBusy || busy) return
+        if (rzpBusy) return
         rzpBusy = true; error = null
         scope.launch {
             val ordR = qrmaster.web.data.PaymentsApi.createPremiumOrder(planKey, coupon?.code)
@@ -3014,20 +3004,6 @@ private fun PremiumBuyDialog(
     } else 0L
     val finalAmt = basePrice - discount
     val freeClaim = finalAmt <= 0L
-
-    fun encodeShot(f: WebFile) {
-        scope.launch {
-            val dataUrl = loadFileDataUrl(f) ?: return@launch
-            imgOp("shotEncode", "{\"dataUrl\":\"$dataUrl\"}")
-            val res = awaitAsync("img", 60_000)
-            if (res != null && res.asyncOk()) {
-                shotB64 = res.asyncStr("b64")
-                shotName = f.name
-            } else {
-                state.toast("Could not process that screenshot")
-            }
-        }
-    }
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -3068,10 +3044,15 @@ private fun PremiumBuyDialog(
                 if (couponMsg != null) {
                     Text(couponMsg!!, fontSize = 12.5.sp, color = if (coupon != null) Color(0xFF15803D) else MaterialTheme.colorScheme.error)
                 }
-                if (!freeClaim) {
+                if (freeClaim) {
+                    Text(
+                        "Your coupon covers the full price — no payment is needed. Full-price coupon claims are available in the Kitnook Android app.",
+                        fontSize = 13.sp, color = Color(0xFF15803D)
+                    )
+                } else {
                     Button(
                         onClick = { payOnline() },
-                        enabled = !rzpBusy && !busy && (coupon == null || coupon!!.discountAmount >= 0),
+                        enabled = !rzpBusy && (coupon == null || coupon!!.discountAmount >= 0),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
                         modifier = Modifier.fillMaxWidth()
@@ -3083,7 +3064,7 @@ private fun PremiumBuyDialog(
                     }
                     if (coupon != null && coupon!!.discountAmount < 0) {
                         Text(
-                            "Percentage coupons work with the UPI request option below.",
+                            "Percentage coupons can't be used with online payment on the website. You can use them in the Kitnook Android app.",
                             fontSize = 12.sp, color = MutedText
                         )
                     }
@@ -3093,124 +3074,38 @@ private fun PremiumBuyDialog(
                             fontSize = 12.sp, color = MutedText
                         )
                     }
-                    Text(
-                        "— or pay by UPI —",
-                        fontSize = 12.sp, color = MutedText,
-                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
-                    )
-                }
-                if (freeClaim) {
-                    Text(
-                        "Your coupon covers the full price — no payment needed. Premium starts after the admin approves this request.",
-                        fontSize = 13.sp, color = Color(0xFF15803D)
-                    )
-                } else {
-                    Text("1) Pay ₹$finalAmt to this UPI ID:", fontSize = 13.sp)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(
-                            Modifier.clip(RoundedCornerShape(9.dp)).background(Color(0xFFF0EAFE))
-                                .padding(horizontal = 12.dp, vertical = 9.dp)
-                        ) { Text(upiId, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PurplePrimary) }
-                        OutlinedButton(
-                            onClick = { copyTextToClipboard(upiId); state.toast("UPI ID copied") },
-                            shape = RoundedCornerShape(9.dp)
-                        ) { Text("Copy", fontSize = 12.sp) }
-                        OutlinedButton(
-                            onClick = {
-                                openExternal("upi://pay?pa=$upiId&pn=Link%20To%20QR&am=$finalAmt&cu=INR")
-                            },
-                            shape = RoundedCornerShape(9.dp)
-                        ) { Text("Open UPI App", fontSize = 12.sp) }
-                    }
-                    Text("2) Enter the UTR / transaction number from your payment:", fontSize = 13.sp)
-                    OutlinedTextField(
-                        value = utr,
-                        onValueChange = { utr = it },
-                        label = { Text("UTR number (12+ characters)") },
-                        singleLine = true, shape = RoundedCornerShape(9.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text("3) Attach the payment screenshot:", fontSize = 13.sp)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
-                                    if (err != null) state.toast(err)
-                                    incoming.firstOrNull()?.let { encodeShot(it) }
-                                }
-                            },
-                            shape = RoundedCornerShape(9.dp)
-                        ) { Text("Attach Screenshot", fontSize = 12.sp) }
-                        if (shotName.isNotBlank()) Text(shotName.take(20), fontSize = 12.sp, color = MutedText, maxLines = 1)
-                    }
                 }
                 if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
                 Text(
-                    "Online payments activate instantly. For UPI requests, premium activates after the admin verifies your payment — track it under My Requests.",
+                    "Payments are processed securely by Razorpay and your plan activates instantly.",
                     fontSize = 11.5.sp, color = MutedText
                 )
             }
         },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (!freeClaim) {
-                        if (!qrmaster.web.data.isValidUtr(utr)) {
-                            error = "Please enter a valid UTR (at least 12 letters/numbers)."
-                            return@TextButton
-                        }
-                        if (shotB64 == null) {
-                            error = "Please attach the payment screenshot."
-                            return@TextButton
-                        }
-                    }
-                    busy = true; error = null
-                    scope.launch {
-                        val r = EarnApi.submitPlanRequest(
-                            planKey, basePrice, coupon,
-                            if (freeClaim) "COUPON" else utr.trim(),
-                            if (freeClaim) null else shotB64
-                        )
-                        busy = false
-                        when (r) {
-                            is qrmaster.web.data.SimpleOutcome.Ok -> {
-                                state.toast("Request sent — premium activates after approval.")
-                                onDone()
-                            }
-                            is qrmaster.web.data.SimpleOutcome.Rejected -> error = r.message
-                        }
-                    }
-                },
-                enabled = !busy && !rzpBusy
-            ) { Text(if (freeClaim) "Claim Free Premium" else "Submit Request") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } }
+        dismissButton = { TextButton(onClick = onClose) { Text("Close") } },
+        confirmButton = {}
     )
 }
+
 
 @Composable
 private fun CreditBuyDialog(
     state: AppState,
     packCredits: Int,
     packPrice: Int,
-    upiId: String,
     onClose: () -> Unit,
     onDone: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var qty by remember { mutableStateOf(1) }
-    var utr by remember { mutableStateOf("") }
-    var shotB64 by remember { mutableStateOf<String?>(null) }
-    var shotName by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
     var rzpBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val total = packPrice * qty
 
     fun payOnline() {
-        if (rzpBusy || busy) return
+        if (rzpBusy) return
         if (qty > 4) {
-            error = "Online payment supports up to 4 packs at once. Lower the quantity, or use the UPI request option below."
+            error = "Online payment supports up to 4 packs at once. Please lower the quantity."
             return
         }
         rzpBusy = true; error = null
@@ -3245,20 +3140,6 @@ private fun CreditBuyDialog(
         }
     }
 
-    fun encodeShot(f: WebFile) {
-        scope.launch {
-            val dataUrl = loadFileDataUrl(f) ?: return@launch
-            imgOp("shotEncode", "{\"dataUrl\":\"$dataUrl\"}")
-            val res = awaitAsync("img", 60_000)
-            if (res != null && res.asyncOk()) {
-                shotB64 = res.asyncStr("b64")
-                shotName = f.name
-            } else {
-                state.toast("Could not process that screenshot")
-            }
-        }
-    }
-
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Buy $packCredits Credits") },
@@ -3271,12 +3152,13 @@ private fun CreditBuyDialog(
                     Text("Quantity:", fontSize = 13.sp)
                     OutlinedButton(onClick = { if (qty > 1) qty-- }, shape = RoundedCornerShape(8.dp)) { Text("−") }
                     Text(qty.toString(), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    OutlinedButton(onClick = { if (qty < 5) qty++ }, shape = RoundedCornerShape(8.dp)) { Text("+") }
+                    OutlinedButton(onClick = { if (qty < 4) qty++ }, shape = RoundedCornerShape(8.dp)) { Text("+") }
                     Text("Total: ₹$total", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
                 }
+                Text("Up to 4 packs per purchase — you can buy again anytime.", fontSize = 11.5.sp, color = MutedText)
                 Button(
                     onClick = { payOnline() },
-                    enabled = !rzpBusy && !busy,
+                    enabled = !rzpBusy,
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
                     modifier = Modifier.fillMaxWidth()
@@ -3292,75 +3174,15 @@ private fun CreditBuyDialog(
                         fontSize = 12.sp, color = MutedText
                     )
                 }
-                Text(
-                    "— or pay by UPI —",
-                    fontSize = 12.sp, color = MutedText,
-                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
-                )
-                Text("Pay ₹$total to UPI ID:", fontSize = 13.sp)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        Modifier.clip(RoundedCornerShape(9.dp)).background(Color(0xFFF0EAFE))
-                            .padding(horizontal = 12.dp, vertical = 9.dp)
-                    ) { Text(upiId, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PurplePrimary) }
-                    OutlinedButton(
-                        onClick = { copyTextToClipboard(upiId); state.toast("UPI ID copied") },
-                        shape = RoundedCornerShape(9.dp)
-                    ) { Text("Copy", fontSize = 12.sp) }
-                    OutlinedButton(
-                        onClick = { openExternal("upi://pay?pa=$upiId&pn=Link%20To%20QR&am=$total&cu=INR") },
-                        shape = RoundedCornerShape(9.dp)
-                    ) { Text("Open UPI App", fontSize = 12.sp) }
-                }
-                OutlinedTextField(
-                    value = utr,
-                    onValueChange = { utr = it },
-                    label = { Text("UTR number (12+ characters)") },
-                    singleLine = true, shape = RoundedCornerShape(9.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            launchPick(scope, IMAGE_SPEC, false, current = { emptyList() }) { incoming, err ->
-                                if (err != null) state.toast(err)
-                                incoming.firstOrNull()?.let { encodeShot(it) }
-                            }
-                        },
-                        shape = RoundedCornerShape(9.dp)
-                    ) { Text("Attach Screenshot (optional)", fontSize = 12.sp) }
-                    if (shotName.isNotBlank()) Text(shotName.take(20), fontSize = 12.sp, color = MutedText, maxLines = 1)
-                }
                 if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
-                Text("Online payments add credits instantly. For UPI requests, credits are added after the admin verifies your payment.", fontSize = 11.5.sp, color = MutedText)
+                Text("Payments are processed securely by Razorpay. Credits are added instantly.", fontSize = 11.5.sp, color = MutedText)
             }
         },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (!qrmaster.web.data.isValidUtr(utr)) {
-                        error = "Please enter a valid UTR (at least 12 letters/numbers)."
-                        return@TextButton
-                    }
-                    busy = true; error = null
-                    scope.launch {
-                        val r = EarnApi.submitCreditRequest(packCredits, packPrice, qty, utr.trim(), shotB64)
-                        busy = false
-                        when (r) {
-                            is qrmaster.web.data.SimpleOutcome.Ok -> {
-                                state.toast("Request sent — credits arrive after approval.")
-                                onDone()
-                            }
-                            is qrmaster.web.data.SimpleOutcome.Rejected -> error = r.message
-                        }
-                    }
-                },
-                enabled = !busy && !rzpBusy
-            ) { Text("Submit Request") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } }
+        dismissButton = { TextButton(onClick = onClose) { Text("Close") } },
+        confirmButton = {}
     )
 }
+
 /* ---------------- Login / Register ---------------- */
 
 @Composable

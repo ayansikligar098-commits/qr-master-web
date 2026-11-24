@@ -54,12 +54,12 @@ object PaymentsApi {
         "wallet_frozen" -> "Your wallet is frozen, so online payment is not available."
         "rate_limited" -> "Too many payment attempts. Please wait a few minutes and try again."
         "backend_not_configured", "payments_locked" ->
-            "Online payments are not available right now. Please use the UPI request option below."
+            "Online payments are not available right now. Please try again later."
         "coupon_invalid" -> "That coupon code is not valid for online payment."
         "coupon_expired" -> "That coupon has expired."
         "coupon_limit_reached" -> "That coupon has reached its usage limit."
         "coupon_covers_full_amount" ->
-            "Your coupon covers the full price — use the free claim option instead of online payment."
+            "Your coupon covers the full price, so no payment is needed. Full-price coupon claims are available in the Kitnook Android app."
         "invalid_pack", "invalid_qty", "invalid_plan", "invalid_kind", "invalid_amount" ->
             "This payment option is not available. Please try again."
         "user_not_found" -> "Your profile was not found. Please log in again."
