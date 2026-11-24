@@ -1027,20 +1027,87 @@ fun CurrencyScreen(state: AppState) {
 
 @Composable
 fun PercentScreen(state: AppState) {
-    var mode by remember { mutableStateOf(0) }
+    // ── Hero mode (the owner's flow): Amount + % → one plain sentence ──
+    var amount by remember { mutableStateOf("") }
+    var percent by remember { mutableStateOf("") }
+    val amt = amount.toDoubleOrNull()
+    val pct = percent.toDoubleOrNull()
+    val heroResult = if (amt != null && pct != null)
+        "${CalcFormat.number(pct)}% of ${CalcFormat.number(amt)} = ${CalcFormat.number(PercentLogic.percentOf(pct, amt))}"
+    else null
+
+    // ── Extra modes below: share, change, discount ──
+    var mode by remember { mutableStateOf(0) } // 0 = what %, 1 = % change, 2 = discount
     var a by remember { mutableStateOf("") }
     var b by remember { mutableStateOf("") }
-    var result by remember { mutableStateOf<String?>(null) }
-    val modes = listOf("What is X% of Y?", "X is what % of Y?", "% change X → Y")
-    ToolPage(IconKind.Percent, "Percentage Calculator", "Percentages, shares and percentage change.") {
+    val x = a.toDoubleOrNull(); val y = b.toDoubleOrNull()
+    val extraResult: String? = when {
+        x == null || y == null -> null
+        mode == 0 -> PercentLogic.whatPercent(x, y)?.let {
+            "${CalcFormat.number(x)} is ${CalcFormat.number(it)}% of ${CalcFormat.number(y)}"
+        } ?: "Total cannot be zero."
+        mode == 1 -> PercentLogic.change(x, y)?.let {
+            val sign = if (it > 0) "increase" else if (it < 0) "decrease" else "no change"
+            "${CalcFormat.number(x)} → ${CalcFormat.number(y)} is a ${CalcFormat.number(kotlin.math.abs(it))}% $sign"
+        } ?: "The starting value cannot be zero."
+        else -> when {
+            y < 0 || y > 100 -> "Discount must be between 0% and 100%."
+            x < 0 -> "Price cannot be negative."
+            else -> {
+                val saved = PercentLogic.percentOf(y, x)
+                "You pay ₹${CalcFormat.money(x - saved)} — you save ₹${CalcFormat.money(saved)} (${CalcFormat.number(y)}% off ₹${CalcFormat.number(x)})"
+            }
+        }
+    }
+
+    // Record settled results in History (debounced — typing through
+    // partial numbers must not spam the log).
+    val settled = heroResult ?: extraResult
+    LaunchedEffect(settled) {
+        if (settled != null && !settled.contains("cannot") && !settled.startsWith("Discount must")) {
+            delay(1200)
+            recordHistory("Percentage Calculator", "Percentage calculated", settled)
+        }
+    }
+
+    ToolPage(IconKind.Percent, "Percentage Calculator", "Enter an amount and a percent — the answer appears as you type.") {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                    Text("How much is the percent of an amount?", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = amount, onValueChange = { amount = it },
+                            label = { Text("Amount") },
+                            singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = percent, onValueChange = { percent = it },
+                            label = { Text("Percent (%)") },
+                            singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (heroResult != null) {
+                        Text(heroResult, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = PurplePrimary)
+                    } else {
+                        Text(
+                            if (amount.isBlank() && percent.isBlank()) "Type an amount and a percent — for example, 12% of 5000."
+                            else "Please enter valid numbers in both fields.",
+                            fontSize = 13.sp, color = MutedText
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            WhiteCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                    Text("More percentage tools", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = NavyText)
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        modes.forEachIndexed { i, m ->
+                        listOf("X is what % of Y?", "% change X → Y", "Discount").forEachIndexed { i, m ->
                             FilterChip(
                                 selected = mode == i,
-                                onClick = { mode = i; result = null },
+                                onClick = { mode = i },
                                 label = { Text(m, fontSize = 12.sp) },
                                 shape = RoundedCornerShape(20.dp),
                                 colors = FilterChipDefaults.filterChipColors(
@@ -1052,32 +1119,26 @@ fun PercentScreen(state: AppState) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = a, onValueChange = { a = it },
-                            label = { Text(if (mode == 0) "Percent (X)" else "Value (X)") },
+                            label = { Text(when (mode) { 0 -> "Value (X)"; 1 -> "From (X)"; else -> "Price (₹)" }) },
                             singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)
                         )
                         OutlinedTextField(
                             value = b, onValueChange = { b = it },
-                            label = { Text(if (mode == 2) "New value (Y)" else "Total (Y)") },
+                            label = { Text(when (mode) { 0 -> "Total (Y)"; 1 -> "To (Y)"; else -> "Discount (% off)" }) },
                             singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)
                         )
                     }
-                    PrimaryToolButton("Calculate", enabled = true, busy = false) {
-                        val x = a.toDoubleOrNull(); val y = b.toDoubleOrNull()
-                        result = when {
-                            x == null || y == null -> "Please enter valid numbers."
-                            mode == 0 -> "${CalcFormat.number(x)}% of ${CalcFormat.number(y)} = ${CalcFormat.number(PercentLogic.percentOf(x, y))}"
-                            mode == 1 -> PercentLogic.whatPercent(x, y)?.let {
-                                "${CalcFormat.number(x)} is ${CalcFormat.number(it)}% of ${CalcFormat.number(y)}"
-                            } ?: "Total cannot be zero."
-                            else -> PercentLogic.change(x, y)?.let {
-                                val sign = if (it > 0) "increase" else if (it < 0) "decrease" else "no change"
-                                "${CalcFormat.number(x)} → ${CalcFormat.number(y)} is a ${CalcFormat.number(kotlin.math.abs(it))}% $sign"
-                            } ?: "The starting value cannot be zero."
-                        }
-                        if (x != null && y != null) recordHistory("Percentage Calculator", "Percentage calculated", result ?: "")
-                    }
-                    if (result != null) {
-                        Text(result!!, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PurplePrimary)
+                    if (extraResult != null) {
+                        Text(extraResult, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PurplePrimary)
+                    } else {
+                        Text(
+                            when (mode) {
+                                0 -> "For example: 50 is what % of 200?"
+                                1 -> "For example: from 100 to 125 — how much % change?"
+                                else -> "For example: ₹999 with 10% off — what do you pay?"
+                            },
+                            fontSize = 13.sp, color = MutedText
+                        )
                     }
                 }
             }
