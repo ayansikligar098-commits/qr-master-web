@@ -234,12 +234,20 @@ private class PpModel {
  * that breakpoint (resize, rotation, tab restore) threw away the photo
  * and every setting. Mirrors the PDF Editor's PdfEditorDocCache fix.
  * On top of this, the session is also persisted to IndexedDB (see
- * ppSaveSession) so even a full page reload restores it.
+ * ppSaveSession) so it survives even a full page reload.
+ *
+ * Like the PDF Editor, the cache hands its model back ONLY to a
+ * recreation under the same navigation epoch ([ownerEpoch] — a layout
+ * flip while the user stays on this screen). A real navigation bumps
+ * the epoch, and the tool then starts EMPTY: the previous photo lives
+ * on only as the IndexedDB record, behind the explicit "Resume last
+ * photo" button (owner's order — the old photo must never pop back
+ * open unasked, same as the PDF Editor).
  */
 private object PpSessionCache {
     var model: PpModel? = null
     var files: List<WebFile> = emptyList()
-    var restoreTried: Boolean = false
+    var ownerEpoch: Int = -1
 }
 
 private const val PP_IDB_NAME = "passport-session"
@@ -337,24 +345,53 @@ private fun ppRestoreSession(m: PpModel, json: String): Boolean {
 @Composable
 fun PassportPhotoScreen(state: AppState) {
     val scope = rememberCoroutineScope()
-    val m = remember { PpSessionCache.model ?: PpModel().also { PpSessionCache.model = it } }
-    var files by remember { mutableStateOf(PpSessionCache.files) }
+    // The navigation epoch this screen instance was created under. The
+    // session cache only hands its model back when it was cached under
+    // THIS epoch (a 760 dp layout flip recreating us mid-work). Any
+    // real navigation bumps the epoch, so the tool starts EMPTY and
+    // the previous photo can return only via Upload or "Resume last
+    // photo" — never automatically (owner's order).
+    val entryEpoch = remember { state.navEpoch }
+    val cacheLive = PpSessionCache.ownerEpoch == entryEpoch && PpSessionCache.model != null
+    val m = remember {
+        if (cacheLive) PpSessionCache.model!!
+        else PpModel().also { PpSessionCache.model = it; PpSessionCache.ownerEpoch = entryEpoch }
+    }
+    var files by remember { mutableStateOf(if (cacheLive) PpSessionCache.files else emptyList()) }
+    // The IndexedDB record from a previous visit, once the entry check
+    // finds one. It is NEVER applied automatically — it only arms the
+    // "Resume last photo" button on the landing state.
+    var savedSessionJson by remember { mutableStateOf<String?>(null) }
 
     // Keep the picked-file list in the session cache too (breakpoint-safe).
     LaunchedEffect(files) { PpSessionCache.files = files }
 
+    // Bring back the photo saved in IndexedDB — ONLY when the user
+    // taps "Resume last photo" on the landing state.
+    fun resumeLastPhoto() {
+        val json = savedSessionJson ?: return
+        if (m.stage != PPStage.Landing || m.originalUrl.isNotBlank()) return
+        if (!ppRestoreSession(m, json)) {
+            // The saved copy no longer applies — drop the record so
+            // the landing comes up clean, quietly.
+            idbClear(PP_IDB_NAME)
+            savedSessionJson = null
+        }
+    }
+
     // Warm the background-removal model cache in the background, and
-    // restore any session saved in IndexedDB (tab discard / reload) —
-    // the user returns to the Maker with photo + settings intact.
+    // check IndexedDB for a session saved by a previous visit (tab
+    // discard / reload). The record is only READ here — it arms the
+    // Resume button and is never applied automatically.
     LaunchedEffect(Unit) {
         warmBgModel()
-        if (!PpSessionCache.restoreTried) {
-            PpSessionCache.restoreTried = true
-            if (m.stage == PPStage.Landing && m.originalUrl.isBlank()) {
-                idbLoadStart(PP_IDB_NAME, "pp:restore")
-                val res = awaitAsync("pp:restore", 10_000)
-                val json = if (res != null && res.asyncOk()) res.asyncStr("json") else ""
-                if (json.isNotBlank()) ppRestoreSession(m, json)
+        if (m.stage == PPStage.Landing && m.originalUrl.isBlank()) {
+            idbLoadStart(PP_IDB_NAME, "pp:restore")
+            val res = awaitAsync("pp:restore", 10_000)
+            val json = if (res != null && res.asyncOk()) res.asyncStr("json") else ""
+            // Re-check: the user may have started a new photo meanwhile.
+            if (json.isNotBlank() && m.stage == PPStage.Landing && m.originalUrl.isBlank()) {
+                savedSessionJson = json
             }
         }
     }
@@ -399,6 +436,17 @@ fun PassportPhotoScreen(state: AppState) {
                                 "First use downloads the photo model once (about 60 MB); it stays cached on your device, so later visits start instantly. Your photo never leaves this device.",
                             fontSize = 12.sp, color = MutedText
                         )
+                        if (savedSessionJson != null) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("You were working on a photo on this device last time.",
+                                    fontSize = 12.sp, color = MutedText)
+                                OutlinedButton(onClick = { resumeLastPhoto() },
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    shape = RoundedCornerShape(12.dp)) {
+                                    Text("Resume last photo", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                }
+                            }
+                        }
                         if (m.landingError != null) {
                             Text(m.landingError!!, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                         }
@@ -436,6 +484,7 @@ fun PassportPhotoScreen(state: AppState) {
             PPStage.Maker -> item {
                 PpMaker(state, m, scope, onNewPhoto = {
                     files = emptyList()
+                    savedSessionJson = null
                     idbClear(PP_IDB_NAME)
                     m.reset()
                 })
