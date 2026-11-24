@@ -144,6 +144,7 @@ fun FileZone(
     files: List<WebFile>,
     spec: FileSpec,
     hint: String,
+    bigUploadButton: Boolean = false,
     onChange: (List<WebFile>) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -158,7 +159,7 @@ fun FileZone(
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(
-            Modifier.fillMaxWidth().height(if (files.isEmpty()) 150.dp else 96.dp)
+            Modifier.fillMaxWidth().height(if (files.isEmpty()) (if (bigUploadButton) 216.dp else 150.dp) else 96.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(Color(0xFFFBFAFF))
                 .drawBehind {
@@ -175,12 +176,36 @@ fun FileZone(
                 },
             contentAlignment = Alignment.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                QrIcon(IconKind.Download, PurplePrimary, size = 34.dp)
-                Spacer(Modifier.height(8.dp))
-                Text("Click to upload or drag and drop", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = NavyText)
-                Spacer(Modifier.height(3.dp))
-                Text(hint, fontSize = 12.sp, color = MutedText)
+            if (bigUploadButton && files.isEmpty()) {
+                // Big-button entry layout (Passport Photo Maker): one large
+                // brand-purple Upload button, centred, with the drop / paste
+                // helper lines under it. The whole zone stays clickable and
+                // droppable — only the presentation changes.
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(16.dp)).background(PurplePrimary)
+                            .padding(horizontal = 38.dp, vertical = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        QrIcon(IconKind.Upload, Color.White, size = 25.dp)
+                        Spacer(Modifier.width(11.dp))
+                        Text("Upload Image", fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Color.White)
+                    }
+                    Spacer(Modifier.height(15.dp))
+                    Text("or drop a file here", fontSize = 13.5.sp, color = MutedText)
+                    Spacer(Modifier.height(3.dp))
+                    Text("Ctrl+V to paste image", fontSize = 13.5.sp, color = MutedText)
+                    Spacer(Modifier.height(3.dp))
+                    Text(hint, fontSize = 12.sp, color = MutedText)
+                }
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    QrIcon(IconKind.Download, PurplePrimary, size = 34.dp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Click to upload or drag and drop", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = NavyText)
+                    Spacer(Modifier.height(3.dp))
+                    Text(hint, fontSize = 12.sp, color = MutedText)
+                }
             }
         }
         files.forEach { f ->

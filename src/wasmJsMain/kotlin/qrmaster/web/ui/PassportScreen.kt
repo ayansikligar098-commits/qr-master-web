@@ -387,7 +387,7 @@ fun PassportPhotoScreen(state: AppState) {
             PPStage.Landing -> item {
                 WhiteCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                        FileZone(state, files, IMAGE_SPEC, "PNG or JPG photo (max 15 MB) — or paste with Ctrl+V") { picked ->
+                        FileZone(state, files, IMAGE_SPEC, "PNG or JPG photo (max 15 MB)", bigUploadButton = true) { picked ->
                             val grew = picked.size > files.size
                             files = picked.take(1)
                             if (grew && m.stage == PPStage.Landing) {

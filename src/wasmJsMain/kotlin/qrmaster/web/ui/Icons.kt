@@ -23,7 +23,7 @@ import kotlin.math.sin
 enum class IconKind {
     Logo, Home, Grid, Qr, Scan, Barcode, Pdf, Image, Wallet, Spin, Calendar, Gift,
     Task, Users, Play, Crown, Clock, Bell, Gear, Help, Info, Search, Sun, Moon,
-    Menu, Download, Right, Back, Star, Zap, Shield, Merge, Lock, Logout, Eye,
+    Menu, Download, Upload, Right, Back, Star, Zap, Shield, Merge, Lock, Logout, Eye,
     EyeOff, Check, Edit, Compress, FileText, Music, Share, Printer, Percent, Calc, Swap
 }
 
@@ -225,6 +225,11 @@ private fun DrawScope.drawIcon(kind: IconKind, c: Color) {
         IconKind.Download -> {
             line(c, 0.5f, 0.12f, 0.5f, 0.62f, w)
             line(c, 0.3f, 0.44f, 0.5f, 0.64f, w); line(c, 0.7f, 0.44f, 0.5f, 0.64f, w)
+            line(c, 0.16f, 0.86f, 0.84f, 0.86f, w)
+        }
+        IconKind.Upload -> {
+            line(c, 0.5f, 0.88f, 0.5f, 0.38f, w)
+            line(c, 0.3f, 0.56f, 0.5f, 0.36f, w); line(c, 0.7f, 0.56f, 0.5f, 0.36f, w)
             line(c, 0.16f, 0.86f, 0.84f, 0.86f, w)
         }
         IconKind.Right -> {
