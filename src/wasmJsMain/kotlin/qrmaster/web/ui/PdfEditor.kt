@@ -139,12 +139,20 @@ data class EdPageState(
  * threw away the loaded PDF and every edit. The screen initialises from
  * this cache and mirrors back into it; previews/thumbnails are not
  * cached (they re-render from pdfB64 on restore).
+ *
+ * The cache hands its document back ONLY to a recreation under the same
+ * navigation epoch ([ownerEpoch] — a layout flip while the user stays
+ * on this screen). A real navigation (fresh visit, or away and back)
+ * bumps the epoch, and the editor then starts EMPTY: the previous
+ * document lives on only as the IndexedDB record, behind the explicit
+ * "Resume last PDF" button (owner's order — the old PDF must never
+ * pop back open unasked).
  */
 private object PdfEditorDocCache {
     var pdfB64: String? = null
     var fileName: String = ""
     var pages: List<EdPageState> = emptyList()
-    var idbRestoreTried: Boolean = false
+    var ownerEpoch: Int = -1
 }
 
 private const val PDF_IDB_NAME = "pdf-session"
@@ -215,10 +223,22 @@ private suspend fun ensureEditorLibs(): String? {
 @Composable
 fun PdfEditorScreen(state: AppState) {
     val scope = rememberCoroutineScope()
+    // The navigation epoch this screen instance was created under. The
+    // doc cache only hands its document back when it was cached under
+    // THIS epoch (a 760 dp layout flip recreating us mid-edit). Any
+    // real navigation — a fresh visit, or leaving and coming back —
+    // bumps the epoch, so the editor starts EMPTY and the previous
+    // document can return only via Upload or "Resume last PDF".
+    val entryEpoch = remember { state.navEpoch }
+    val cacheLive = PdfEditorDocCache.ownerEpoch == entryEpoch && PdfEditorDocCache.pdfB64 != null
     var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
-    var pdfB64 by remember { mutableStateOf<String?>(PdfEditorDocCache.pdfB64) }
-    var fileName by remember { mutableStateOf(PdfEditorDocCache.fileName) }
-    var pages by remember { mutableStateOf(PdfEditorDocCache.pages) }
+    var pdfB64 by remember { mutableStateOf<String?>(if (cacheLive) PdfEditorDocCache.pdfB64 else null) }
+    var fileName by remember { mutableStateOf(if (cacheLive) PdfEditorDocCache.fileName else "") }
+    var pages by remember { mutableStateOf(if (cacheLive) PdfEditorDocCache.pages else emptyList()) }
+    // The IndexedDB record from a previous visit (base64 to file name),
+    // once the entry check finds one. It is NEVER opened automatically —
+    // it only arms the "Resume last PDF" button on the empty state.
+    var savedSession by remember { mutableStateOf<Pair<String, String>?>(null) }
     var current by remember { mutableStateOf(0) }
     var tool by remember { mutableStateOf(EdTool.Select) }
     var tab by remember { mutableStateOf(EdTab.Edit) }
@@ -333,6 +353,7 @@ fun PdfEditorScreen(state: AppState) {
         PdfEditorDocCache.pdfB64 = pdfB64
         PdfEditorDocCache.fileName = fileName
         PdfEditorDocCache.pages = pages
+        PdfEditorDocCache.ownerEpoch = entryEpoch
     }
     LaunchedEffect(Unit) {
         if (pages.isNotEmpty() && pdfB64 != null && previews.isEmpty()) {
@@ -401,34 +422,45 @@ fun PdfEditorScreen(state: AppState) {
         openDocument(b64, f.name, restored = false)
     }
 
-    // Restore the last opened document from IndexedDB — a discarded tab
-    // or a full page reload loses nothing (PdfEditorDocCache only
-    // survives layout flips inside one page load). Document-level
-    // restore only: the original PDF comes back exactly as opened;
-    // in-progress edits are not saved. Mirrors the Passport restore.
+    // Bring back the document saved in IndexedDB — ONLY when the user
+    // taps "Resume last PDF" on the empty state (owner's order: the
+    // editor must open empty; the old PDF must never appear unasked).
+    // Document-level restore only: the original PDF comes back exactly
+    // as opened; in-progress edits are not saved.
+    fun resumeLastPdf() {
+        val saved = savedSession ?: return
+        if (pdfB64 != null || pages.isNotEmpty() || busy) return
+        scope.launch {
+            val ok = openDocument(saved.first, saved.second, restored = true)
+            if (!ok) {
+                // The saved copy no longer opens — drop the record so
+                // the empty state comes up clean, quietly.
+                idbClear(PDF_IDB_NAME)
+                savedSession = null
+                errorText = null; statusText = null
+            }
+        }
+    }
+
+    // Entry check: does IndexedDB hold a document from a previous
+    // visit? The record is only READ here — it arms the "Resume last
+    // PDF" button and is never opened automatically. (PdfEditorDocCache
+    // covers layout flips inside one page load; this record is what
+    // survives a discarded tab or a full page reload.)
     LaunchedEffect(Unit) {
-        if (!PdfEditorDocCache.idbRestoreTried) {
-            PdfEditorDocCache.idbRestoreTried = true
-            if (pdfB64 == null && pages.isEmpty()) {
-                idbLoadStart(PDF_IDB_NAME, "pdf:restore")
-                val res = awaitAsync("pdf:restore", 10_000)
-                val json = if (res != null && res.asyncOk()) res.asyncStr("json") else ""
-                // Re-check: the user may have picked a file meanwhile.
-                if (json.isNotBlank() && pdfB64 == null && pages.isEmpty()) {
-                    val root = try {
-                        toolsJson.parseToJsonElement(json).jsonObject
-                    } catch (e: Exception) { null }
-                    val savedB64 = root?.asyncStr("pdf") ?: ""
-                    val savedName = root?.asyncStr("fileName") ?: ""
-                    if (savedB64.isNotBlank()) {
-                        val ok = openDocument(savedB64, savedName.ifBlank { "Restored document.pdf" }, restored = true)
-                        if (!ok) {
-                            // The saved copy no longer opens — drop the
-                            // record so the picker comes up clean, quietly.
-                            idbClear(PDF_IDB_NAME)
-                            errorText = null; statusText = null
-                        }
-                    }
+        if (pdfB64 == null && pages.isEmpty()) {
+            idbLoadStart(PDF_IDB_NAME, "pdf:restore")
+            val res = awaitAsync("pdf:restore", 10_000)
+            val json = if (res != null && res.asyncOk()) res.asyncStr("json") else ""
+            // Re-check: the user may have picked a file meanwhile.
+            if (json.isNotBlank() && pdfB64 == null && pages.isEmpty()) {
+                val root = try {
+                    toolsJson.parseToJsonElement(json).jsonObject
+                } catch (e: Exception) { null }
+                val savedB64 = root?.asyncStr("pdf") ?: ""
+                val savedName = root?.asyncStr("fileName") ?: ""
+                if (savedB64.isNotBlank()) {
+                    savedSession = savedB64 to savedName.ifBlank { "Restored document.pdf" }
                 }
             }
         }
@@ -1182,6 +1214,7 @@ fun PdfEditorScreen(state: AppState) {
                 OutlinedButton(onClick = {
                     files = emptyList(); pages = emptyList(); pdfB64 = null
                     previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); selectedId = null
+                    savedSession = null
                     idbClear(PDF_IDB_NAME)
                 }) { Text("Open PDF", fontSize = 13.sp) }
                 Spacer(Modifier.width(10.dp))
@@ -1211,7 +1244,19 @@ fun PdfEditorScreen(state: AppState) {
                         Spacer(Modifier.width(10.dp))
                         Text(statusText ?: "Opening…", fontSize = 13.sp, color = MutedText)
                     }
-                    FileZone(state, files, PDF_BIG_SPEC, "PDF only (max 100 MB) — forms, scans and documents") { files = it.take(1) }
+                    FileZone(state, files, PDF_BIG_SPEC, "PDF only (max 100 MB) — forms, scans and documents",
+                        bigUploadButton = true, bigUploadLabel = "Upload PDF", bigUploadPasteHint = false) { files = it.take(1) }
+                    savedSession?.let { saved ->
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("You were editing “${saved.second}” on this device last time.",
+                                fontSize = 12.5.sp, color = MutedText)
+                            OutlinedButton(onClick = { resumeLastPdf() }, enabled = !busy,
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(12.dp)) {
+                                Text("Resume last PDF", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            }
+                        }
+                    }
                     Text("Open a PDF to add text, photos and signatures, highlight, redact, crop, rotate and organise pages — then download the finished file. Everything runs in your browser; your file never leaves this device.",
                         fontSize = 12.5.sp, color = MutedText)
                 }

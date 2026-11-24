@@ -145,6 +145,8 @@ fun FileZone(
     spec: FileSpec,
     hint: String,
     bigUploadButton: Boolean = false,
+    bigUploadLabel: String = "Upload Image",
+    bigUploadPasteHint: Boolean = true,
     onChange: (List<WebFile>) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -177,10 +179,11 @@ fun FileZone(
             contentAlignment = Alignment.Center
         ) {
             if (bigUploadButton && files.isEmpty()) {
-                // Big-button entry layout (Passport Photo Maker): one large
-                // brand-purple Upload button, centred, with the drop / paste
-                // helper lines under it. The whole zone stays clickable and
-                // droppable — only the presentation changes.
+                // Big-button entry layout (Passport Photo Maker, PDF
+                // Editor): one large brand-purple Upload button, centred,
+                // with the drop / paste helper lines under it. The whole
+                // zone stays clickable and droppable — only the
+                // presentation changes.
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Row(
                         Modifier.clip(RoundedCornerShape(16.dp)).background(PurplePrimary)
@@ -189,12 +192,14 @@ fun FileZone(
                     ) {
                         QrIcon(IconKind.Upload, Color.White, size = 25.dp)
                         Spacer(Modifier.width(11.dp))
-                        Text("Upload Image", fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Color.White)
+                        Text(bigUploadLabel, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Color.White)
                     }
                     Spacer(Modifier.height(15.dp))
                     Text("or drop a file here", fontSize = 13.5.sp, color = MutedText)
-                    Spacer(Modifier.height(3.dp))
-                    Text("Ctrl+V to paste image", fontSize = 13.5.sp, color = MutedText)
+                    if (bigUploadPasteHint) {
+                        Spacer(Modifier.height(3.dp))
+                        Text("Ctrl+V to paste image", fontSize = 13.5.sp, color = MutedText)
+                    }
                     Spacer(Modifier.height(3.dp))
                     Text(hint, fontSize = 12.sp, color = MutedText)
                 }

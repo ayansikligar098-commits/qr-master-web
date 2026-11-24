@@ -76,7 +76,22 @@ val NavyText = Color(0xFF191938)
 val MutedText = Color(0xFF6E6A85)
 
 class AppState {
-    var screen by mutableStateOf(Screen.Dashboard)
+    private val _screen = mutableStateOf(Screen.Dashboard)
+
+    /** The current screen. Assigning a DIFFERENT screen bumps
+     *  [navEpoch]; the 760 dp shell swap never touches this property,
+     *  which is how a screen can tell "the user navigated here" apart
+     *  from "the shell recreated me after a layout flip". */
+    var screen: Screen
+        get() = _screen.value
+        set(value) {
+            if (_screen.value != value) navEpoch++
+            _screen.value = value
+        }
+
+    /** Monotonic count of real navigations (see [screen]). */
+    var navEpoch: Int = 0
+        private set
     var placeholderTitle by mutableStateOf("")
     var user by mutableStateOf<WebUser?>(FirebaseApi.session)
     var profile by mutableStateOf<Profile?>(null)
