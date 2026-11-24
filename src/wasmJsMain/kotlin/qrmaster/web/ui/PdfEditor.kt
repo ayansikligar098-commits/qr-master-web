@@ -1568,7 +1568,10 @@ fun EdNumField(label: String, value: Float, onChange: (Float) -> Unit) {
         value = text,
         onValueChange = { t ->
             text = t
-            t.toFloatOrNull()?.let { onChange(it) }
+            // Clamp to a sane range: an unbounded typed value (e.g. a height
+            // of 357160 pt) makes the canvas try to render an object bigger
+            // than any real page and kills the renderer.
+            t.toFloatOrNull()?.let { onChange(it.coerceIn(-2000f, 4000f)) }
         },
         label = { Text(label, fontSize = 11.sp) },
         singleLine = true,
