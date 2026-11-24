@@ -295,14 +295,42 @@ fun MobileShell(state: AppState) {
     }
 }
 
+/** Final brand logo (loaded once from the site root; vector mark until it arrives). */
+object BrandLogo {
+    var bitmap by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    var started = false
+}
+
 @Composable
 fun LogoMark(size: androidx.compose.ui.unit.Dp) {
-    Box(
-        Modifier.size(size).clip(RoundedCornerShape(size * 0.28f))
-            .background(PurplePrimary),
-        contentAlignment = Alignment.Center
-    ) {
-        QrIcon(IconKind.Logo, Color.White, size = size * 0.68f)
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        if (!BrandLogo.started) {
+            BrandLogo.started = true
+            scope.launch {
+                try {
+                    val dataUrl = fetchResourceDataUrl("logo-mark.png")
+                    if (dataUrl != null) BrandLogo.bitmap = decodeBitmapFromDataUrl(dataUrl)
+                } catch (e: Exception) { }
+            }
+        }
+    }
+    val bmp = BrandLogo.bitmap
+    if (bmp != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bmp,
+            contentDescription = "Kitnook",
+            modifier = Modifier.size(size).clip(RoundedCornerShape(size * 0.28f)),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+        )
+    } else {
+        Box(
+            Modifier.size(size).clip(RoundedCornerShape(size * 0.28f))
+                .background(PurplePrimary),
+            contentAlignment = Alignment.Center
+        ) {
+            QrIcon(IconKind.Logo, Color.White, size = size * 0.68f)
+        }
     }
 }
 

@@ -12,7 +12,13 @@
     <meta property="og:description" content="Kitnook — Everything You Need, One Nook. Free QR code generator, PDF converter & editor, passport photo maker, calculators and Spin & Earn — all your tools in one place.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://kitnook.pages.dev/">
-    <meta name="twitter:card" content="summary">
+    <meta property="og:image" content="https://kitnook.pages.dev/og-image.png">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://kitnook.pages.dev/og-image.png">
     <meta name="twitter:title" content="Kitnook — Free QR Code Generator, PDF Tools, Passport Photo & More">
     <meta name="twitter:description" content="Kitnook — Everything You Need, One Nook. Free QR code generator, PDF converter & editor, passport photo maker, calculators and Spin & Earn — all your tools in one place.">
     <link type="text/css" rel="stylesheet" href="styles.css">
@@ -201,6 +207,69 @@
             return 'ready';
         }
         return 'loading';
+    };
+
+    // ── Razorpay Checkout bridge ─────────────────────────────────────────
+    // Same poll pattern as Google sign-in: the Kotlin side starts the
+    // checkout with a JSON options string and polls window.__qmRzp for the
+    // outcome. States: paid {paymentId, rzpOrderId, signature} | failed
+    // {message} | dismissed | error {message}. The grant itself happens
+    // ONLY on the server after /v1/payments/verify — this bridge just
+    // collects the checkout result.
+    window.__qmOpenRazorpay = function (optsJson) {
+        window.__qmRzp = '';
+        function fail(msg) { window.__qmRzp = JSON.stringify({ state: 'error', message: msg }); }
+        function start() {
+            try {
+                var o = JSON.parse(optsJson);
+                var rzp = new Razorpay({
+                    key: o.key,
+                    amount: o.amount,
+                    currency: o.currency || 'INR',
+                    name: 'Kitnook',
+                    description: o.description || 'Kitnook payment',
+                    order_id: o.order_id,
+                    prefill: o.prefill || {},
+                    theme: { color: '#6D28D9' },
+                    handler: function (resp) {
+                        window.__qmRzp = JSON.stringify({
+                            state: 'paid',
+                            paymentId: resp.razorpay_payment_id || '',
+                            rzpOrderId: resp.razorpay_order_id || '',
+                            signature: resp.razorpay_signature || ''
+                        });
+                    },
+                    modal: {
+                        ondismiss: function () {
+                            if (!window.__qmRzp) {
+                                window.__qmRzp = JSON.stringify({ state: 'dismissed' });
+                            }
+                        }
+                    }
+                });
+                rzp.on('payment.failed', function (resp) {
+                    var d = (resp && resp.error && resp.error.description) || 'Payment failed. Please try again.';
+                    window.__qmRzp = JSON.stringify({ state: 'failed', message: d });
+                });
+                rzp.open();
+            } catch (e) {
+                fail('Could not open the payment window. Please try again.');
+            }
+        }
+        if (typeof Razorpay !== 'undefined') { start(); return; }
+        qmLoadScript('razorpay', 'https://checkout.razorpay.com/v1/checkout.js');
+        var waited = 0;
+        var iv = setInterval(function () {
+            waited += 200;
+            if (typeof Razorpay !== 'undefined') { clearInterval(iv); start(); }
+            else if ((window.__qmLibState['razorpay'] || '').indexOf('error') === 0) {
+                clearInterval(iv);
+                fail('Could not load the payment page. Check your connection and try again.');
+            } else if (waited > 20000) {
+                clearInterval(iv);
+                fail('The payment page took too long to load. Please try again.');
+            }
+        }, 200);
     };
 
     function qmB64ToBytes(b64) {

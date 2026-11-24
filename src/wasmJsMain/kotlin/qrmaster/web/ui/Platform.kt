@@ -139,3 +139,16 @@ external fun startGoogleSignIn(apiKey: String, authDomain: String, projectId: St
 
 @JsFun("() => { return window.__qmGoogle || ''; }")
 external fun pollGoogleSignIn(): String
+
+/**
+ * Razorpay Checkout bridge (shell function in index.html). Starts the
+ * checkout for a server-created order; the outcome is polled via
+ * [pollRazorpay] as JSON: paid / failed / dismissed / error. Money is
+ * granted ONLY by the payment server after verification — this bridge
+ * never grants anything itself.
+ */
+@JsFun("(optsJson) => { window.__qmOpenRazorpay(optsJson); }")
+external fun startRazorpayCheckout(optsJson: String)
+
+@JsFun("() => { return window.__qmRzp || ''; }")
+external fun pollRazorpay(): String

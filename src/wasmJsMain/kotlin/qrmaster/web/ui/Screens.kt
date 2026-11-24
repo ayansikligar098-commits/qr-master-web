@@ -2972,7 +2972,42 @@ private fun PremiumBuyDialog(
     var shotB64 by remember { mutableStateOf<String?>(null) }
     var shotName by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var rzpBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun payOnline() {
+        if (rzpBusy || busy) return
+        rzpBusy = true; error = null
+        scope.launch {
+            val ordR = qrmaster.web.data.PaymentsApi.createPremiumOrder(planKey, coupon?.code)
+            val ord = ordR.getOrNull()
+            if (ord == null) {
+                error = ordR.exceptionOrNull()?.message ?: "Payment could not be started. Please try again."
+                rzpBusy = false
+                return@launch
+            }
+            val outcome = qrmaster.web.data.PaymentsApi.runCheckout(
+                ord,
+                "Kitnook Premium — ${qrmaster.web.data.PremiumLogic.planName(planKey)}",
+                state.user?.email ?: "",
+                state.profile?.name ?: ""
+            )
+            rzpBusy = false
+            when (outcome) {
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Granted -> {
+                    state.refreshProfile()
+                    state.toast("Payment successful — Premium is now active!")
+                    onDone()
+                }
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Processing -> {
+                    state.toast("Payment received — Premium will activate in a moment.")
+                    onDone()
+                }
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Failed -> error = outcome.message
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Dismissed -> state.toast("Payment cancelled.")
+            }
+        }
+    }
 
     val discount = if (coupon != null) {
         qrmaster.web.data.PremiumLogic.discountFor(basePrice.toLong(), coupon!!.discountAmount, coupon!!.discountPct)
@@ -3033,6 +3068,37 @@ private fun PremiumBuyDialog(
                 if (couponMsg != null) {
                     Text(couponMsg!!, fontSize = 12.5.sp, color = if (coupon != null) Color(0xFF15803D) else MaterialTheme.colorScheme.error)
                 }
+                if (!freeClaim) {
+                    Button(
+                        onClick = { payOnline() },
+                        enabled = !rzpBusy && !busy && (coupon == null || coupon!!.discountAmount >= 0),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (rzpBusy) "Opening Secure Payment…" else "Pay Online — Instant Activation",
+                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (coupon != null && coupon!!.discountAmount < 0) {
+                        Text(
+                            "Percentage coupons work with the UPI request option below.",
+                            fontSize = 12.sp, color = MutedText
+                        )
+                    }
+                    if (rzpBusy) {
+                        Text(
+                            "Complete the payment in the secure Razorpay window.",
+                            fontSize = 12.sp, color = MutedText
+                        )
+                    }
+                    Text(
+                        "— or pay by UPI —",
+                        fontSize = 12.sp, color = MutedText,
+                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
+                    )
+                }
                 if (freeClaim) {
                     Text(
                         "Your coupon covers the full price — no payment needed. Premium starts after the admin approves this request.",
@@ -3080,7 +3146,7 @@ private fun PremiumBuyDialog(
                 }
                 if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
                 Text(
-                    "Premium activates after the admin verifies your payment — usually quickly. Track it under My Requests.",
+                    "Online payments activate instantly. For UPI requests, premium activates after the admin verifies your payment — track it under My Requests.",
                     fontSize = 11.5.sp, color = MutedText
                 )
             }
@@ -3115,7 +3181,7 @@ private fun PremiumBuyDialog(
                         }
                     }
                 },
-                enabled = !busy
+                enabled = !busy && !rzpBusy
             ) { Text(if (freeClaim) "Claim Free Premium" else "Submit Request") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } }
@@ -3137,8 +3203,47 @@ private fun CreditBuyDialog(
     var shotB64 by remember { mutableStateOf<String?>(null) }
     var shotName by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var rzpBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val total = packPrice * qty
+
+    fun payOnline() {
+        if (rzpBusy || busy) return
+        if (qty > 4) {
+            error = "Online payment supports up to 4 packs at once. Lower the quantity, or use the UPI request option below."
+            return
+        }
+        rzpBusy = true; error = null
+        scope.launch {
+            val ordR = qrmaster.web.data.PaymentsApi.createCreditPackOrder(packCredits, qty)
+            val ord = ordR.getOrNull()
+            if (ord == null) {
+                error = ordR.exceptionOrNull()?.message ?: "Payment could not be started. Please try again."
+                rzpBusy = false
+                return@launch
+            }
+            val outcome = qrmaster.web.data.PaymentsApi.runCheckout(
+                ord,
+                "Kitnook Credits — $packCredits × $qty",
+                state.user?.email ?: "",
+                state.profile?.name ?: ""
+            )
+            rzpBusy = false
+            when (outcome) {
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Granted -> {
+                    state.refreshProfile()
+                    state.toast("Payment successful — credits added to your account!")
+                    onDone()
+                }
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Processing -> {
+                    state.toast("Payment received — credits will arrive in a moment.")
+                    onDone()
+                }
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Failed -> error = outcome.message
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Dismissed -> state.toast("Payment cancelled.")
+            }
+        }
+    }
 
     fun encodeShot(f: WebFile) {
         scope.launch {
@@ -3169,6 +3274,29 @@ private fun CreditBuyDialog(
                     OutlinedButton(onClick = { if (qty < 5) qty++ }, shape = RoundedCornerShape(8.dp)) { Text("+") }
                     Text("Total: ₹$total", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
                 }
+                Button(
+                    onClick = { payOnline() },
+                    enabled = !rzpBusy && !busy,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (rzpBusy) "Opening Secure Payment…" else "Pay Online — Instant Credits",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                    )
+                }
+                if (rzpBusy) {
+                    Text(
+                        "Complete the payment in the secure Razorpay window.",
+                        fontSize = 12.sp, color = MutedText
+                    )
+                }
+                Text(
+                    "— or pay by UPI —",
+                    fontSize = 12.sp, color = MutedText,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
+                )
                 Text("Pay ₹$total to UPI ID:", fontSize = 13.sp)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
@@ -3204,7 +3332,7 @@ private fun CreditBuyDialog(
                     if (shotName.isNotBlank()) Text(shotName.take(20), fontSize = 12.sp, color = MutedText, maxLines = 1)
                 }
                 if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
-                Text("Credits are added after the admin verifies your payment.", fontSize = 11.5.sp, color = MutedText)
+                Text("Online payments add credits instantly. For UPI requests, credits are added after the admin verifies your payment.", fontSize = 11.5.sp, color = MutedText)
             }
         },
         confirmButton = {
@@ -3227,7 +3355,7 @@ private fun CreditBuyDialog(
                         }
                     }
                 },
-                enabled = !busy
+                enabled = !busy && !rzpBusy
             ) { Text("Submit Request") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } }
