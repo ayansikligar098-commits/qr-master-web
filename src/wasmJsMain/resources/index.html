@@ -69,11 +69,13 @@
             position: fixed; right: 12px;
             bottom: calc(var(--qm-ad-h) + 12px);
             width: min(350px, calc(100vw - 24px));
+            max-height: min(430px, 60vh); overflow-y: auto;
             background: #ffffff; border: 1px solid #E5E0F5; border-radius: 12px;
             box-shadow: 0 8px 28px rgba(60, 20, 120, 0.16);
             z-index: 99990; padding: 20px 10px 10px;
         }
-        @media (max-width: 760px) { #qm-native-card { right: 8px; left: 8px; width: auto; } }
+        #qm-native-card img, #qm-native-card iframe, #qm-native-card > div { max-width: 100% !important; }
+        @media (max-width: 760px) { #qm-native-card { display: none; } }
         html.qm-native-off #qm-native-card { display: none; }
         .qm-ad-label {
             position: absolute; top: 5px; left: 12px;
@@ -1249,12 +1251,13 @@
     })();
 </script>
 
-<!-- Adsterra — Native Banner card (Placement ID 32440130).
-     Hides itself if no ad fills it. -->
+<!-- Adsterra — Native Banner card (Placement ID 32440130). DESKTOP ONLY:
+     the card is height-capped (see CSS) and the native script is injected
+     only on wide screens — on phones the card never appears and the
+     script is never downloaded. Hides itself if no ad fills it. -->
 <div id="qm-native-card">
     <span class="qm-ad-label">Advertisement</span>
     <button class="qm-ad-close" id="qm-native-close" aria-label="Close ad" title="Close ad">&times;</button>
-    <script async fetchpriority="high" data-cfasync="false" src="https://bauval.org/21/41e28eacebd3378a2157a63e3165516d"></script>
     <div id="container-41e28eacebd3378a2157a63e3165516d"></div>
 </div>
 <script>
@@ -1262,10 +1265,20 @@
         document.getElementById('qm-native-close').addEventListener('click', function () {
             document.documentElement.classList.add('qm-native-off');
         });
-        setTimeout(function () {
-            var c = document.getElementById('container-41e28eacebd3378a2157a63e3165516d');
-            if (c && !c.firstElementChild) document.documentElement.classList.add('qm-native-off');
-        }, 7000);
+        if (window.innerWidth > 760) {
+            var s = document.createElement('script');
+            s.async = true;
+            s.setAttribute('fetchpriority', 'high');
+            s.setAttribute('data-cfasync', 'false');
+            s.src = 'https://bauval.org/21/41e28eacebd3378a2157a63e3165516d';
+            document.getElementById('qm-native-card').appendChild(s);
+            setTimeout(function () {
+                var c = document.getElementById('container-41e28eacebd3378a2157a63e3165516d');
+                if (c && !c.firstElementChild) document.documentElement.classList.add('qm-native-off');
+            }, 7000);
+        } else {
+            document.documentElement.classList.add('qm-native-off');
+        }
     })();
 </script>
 </body>
