@@ -84,6 +84,25 @@ object PaymentsApi {
         }
     }
 
+    /** Wallet top-up bounds — mirrors the server (its word is final). */
+    const val TOPUP_MIN_PAISE = 1000L
+    const val TOPUP_MAX_PAISE = 1000000L
+
+    suspend fun createTopupOrder(amountPaise: Long): Result<Order> {
+        return try {
+            val o = post("/v1/orders", """{"kind":"wallet_topup","amountPaise":$amountPaise}""")
+            Result.success(o.toOrder())
+        } catch (e: Exception) {
+            val code = errorCodeOf(e)
+            Result.failure(
+                Exception(
+                    if (code == "invalid_amount") "Enter an amount between ₹10 and ₹10,000."
+                    else friendlyPayError(code)
+                )
+            )
+        }
+    }
+
     suspend fun createCreditPackOrder(packCredits: Int, qty: Int): Result<Order> {
         return try {
             val o = post("/v1/orders", """{"kind":"credit_pack","pack":$packCredits,"qty":$qty}""")

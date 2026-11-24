@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1734,6 +1735,7 @@ fun WalletScreen(state: AppState) {
     var history by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var showWithdraw by remember { mutableStateOf(false) }
+    var showTopup by remember { mutableStateOf(false) }
     var withdrawBusy by remember { mutableStateOf(false) }
     var withdrawError by remember { mutableStateOf<String?>(null) }
     var upiId by remember { mutableStateOf("") }
@@ -1838,7 +1840,7 @@ fun WalletScreen(state: AppState) {
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(11.dp), modifier = Modifier.fillMaxWidth()) {
-                    WalletAction("Add Money", IconKind.Download, Modifier.weight(1f)) { state.navigate(Screen.Premium) }
+                    WalletAction("Add Money", IconKind.Download, Modifier.weight(1f)) { showTopup = true }
                     WalletAction("Withdraw", IconKind.Wallet, Modifier.weight(1f)) { showWithdraw = true }
                     WalletAction("Transactions", IconKind.FileText, Modifier.weight(1f)) {
                         scopeToastHistory(state)
@@ -1952,6 +1954,161 @@ fun WalletScreen(state: AppState) {
             }
         )
     }
+
+    if (showTopup) {
+        TopupDialog(
+            state = state,
+            onClose = { showTopup = false },
+            onCredited = {
+                scope.launch {
+                    loading = true
+                    history = FirebaseApi.fetchHistory()
+                    loading = false
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun TopupDialog(
+    state: AppState,
+    onClose: () -> Unit,
+    onCredited: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var amountText by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var successMsg by remember { mutableStateOf<String?>(null) }
+
+    // Whole rupees or up to 2 decimal places, converted to paise.
+    fun parsedPaise(): Long? {
+        val t = amountText.trim().replace(",", "")
+        if (t.isBlank()) return null
+        val v = t.toDoubleOrNull() ?: return null
+        if (v.isNaN() || v.isInfinite()) return null
+        return kotlin.math.round(v * 100).toLong()
+    }
+    val paise = parsedPaise()
+    val inBounds = paise != null &&
+        paise >= qrmaster.web.data.PaymentsApi.TOPUP_MIN_PAISE &&
+        paise <= qrmaster.web.data.PaymentsApi.TOPUP_MAX_PAISE
+
+    fun payOnline() {
+        if (busy) return
+        val amt = paise
+        if (amt == null || !inBounds) {
+            error = "Enter an amount between ₹10 and ₹10,000."
+            return
+        }
+        busy = true; error = null
+        scope.launch {
+            val ordR = qrmaster.web.data.PaymentsApi.createTopupOrder(amt)
+            val ord = ordR.getOrNull()
+            if (ord == null) {
+                error = ordR.exceptionOrNull()?.message ?: "Payment could not be started. Please try again."
+                busy = false
+                return@launch
+            }
+            val outcome = qrmaster.web.data.PaymentsApi.runCheckout(
+                ord,
+                "Kitnook Wallet Top-up",
+                state.user?.email ?: "",
+                state.profile?.name ?: ""
+            )
+            when (outcome) {
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Granted -> {
+                    state.refreshProfile()
+                    val newBal = state.profile?.walletPaise ?: 0L
+                    successMsg = "Payment successful — ${fmtRupees(amt)} added to your wallet. " +
+                        "New balance: ${fmtRupees(newBal)}"
+                    onCredited()
+                }
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Processing -> {
+                    state.toast("Payment received — your balance will update in a moment.")
+                    onClose()
+                }
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Failed -> error = outcome.message
+                is qrmaster.web.data.PaymentsApi.CheckoutOutcome.Dismissed -> state.toast("Payment cancelled.")
+            }
+            busy = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onClose() },
+        title = { Text("Add Money") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (successMsg != null) {
+                    Text(successMsg!!, fontSize = 13.5.sp, color = Color(0xFF15803D), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "The same balance shows in the Kitnook Android app.",
+                        fontSize = 12.sp, color = MutedText
+                    )
+                } else {
+                    Text(
+                        "Add money to your wallet with a secure online payment. You can use the balance for Premium and credit packs.",
+                        fontSize = 13.sp
+                    )
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { amountText = it; error = null },
+                        label = { Text("Amount (₹)") },
+                        prefix = { Text("₹") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(9.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(50, 100, 250, 500).forEach { chip ->
+                            OutlinedButton(
+                                onClick = { amountText = chip.toString(); error = null },
+                                shape = RoundedCornerShape(9.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) { Text("₹$chip", fontSize = 12.5.sp) }
+                        }
+                    }
+                    Text("Minimum ₹10 • Maximum ₹10,000 per top-up.", fontSize = 12.sp, color = MutedText)
+                    Button(
+                        onClick = { payOnline() },
+                        enabled = !busy,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (busy) "Opening Secure Payment…"
+                            else if (inBounds) "Pay Online — Add ${fmtRupees(paise ?: 0L)}"
+                            else "Pay Online",
+                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (busy) {
+                        Text("Complete the payment in the secure Razorpay window.", fontSize = 12.sp, color = MutedText)
+                    }
+                    if (error != null) {
+                        Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.5.sp)
+                    }
+                    Text(
+                        "Payments are processed securely by Razorpay. Money is added only after your payment is confirmed.",
+                        fontSize = 11.5.sp, color = MutedText
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (successMsg != null) {
+                TextButton(onClick = onClose) { Text("Done") }
+            }
+        },
+        dismissButton = {
+            if (successMsg == null) {
+                TextButton(onClick = onClose, enabled = !busy) { Text("Cancel") }
+            }
+        }
+    )
 }
 
 fun scopeToastHistory(state: AppState) {
