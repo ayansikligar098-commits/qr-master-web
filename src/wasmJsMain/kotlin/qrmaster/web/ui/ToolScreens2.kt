@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.lazy.items
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -167,19 +168,32 @@ fun ImageToolsScreen(state: AppState) {
 
 // ── Resize Image ───────────────────────────────────────────────────────────
 
+/** Converts a print size (inches or centimetres) at [dpi] to pixels. */
+private fun physToPx(value: String, unit: String, dpi: Int): Int {
+    val x = value.toDoubleOrNull() ?: 0.0
+    val inches = if (unit == "cm") x / 2.54 else x
+    return (inches * dpi).roundToInt()
+}
+
 @Composable
 fun ResizeImageScreen(state: AppState) {
     val scope = rememberCoroutineScope()
     var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
     var dims by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var percentMode by remember { mutableStateOf(true) }
+    var mode by remember { mutableStateOf(0) } // 0 percent, 1 exact pixels, 2 physical size
     var percent by remember { mutableStateOf(50f) }
     var widthIn by remember { mutableStateOf("") }
     var heightIn by remember { mutableStateOf("") }
     var keepAspect by remember { mutableStateOf(true) }
+    var physUnit by remember { mutableStateOf("in") } // "in" | "cm"
+    var physW by remember { mutableStateOf("") }
+    var physH by remember { mutableStateOf("") }
+    var dpiIn by remember { mutableStateOf("300") }
+    var physFormat by remember { mutableStateOf("image/png") }
     var busy by remember { mutableStateOf(false) }
     var resultUrl by remember { mutableStateOf<String?>(null) }
     var resultDims by remember { mutableStateOf<String?>(null) }
+    var resultMime by remember { mutableStateOf("image/png") }
     val file = files.firstOrNull()
     val resultBitmap = remember(resultUrl) { resultUrl?.let { decodeBitmapFromDataUrl(it) } }
 
@@ -197,7 +211,7 @@ fun ResizeImageScreen(state: AppState) {
         }
     }
 
-    ToolPage(IconKind.Edit, "Resize Image", "Resize an image by percent or to exact pixel dimensions.") {
+    ToolPage(IconKind.Edit, "Resize Image", "Resize an image by percent, to exact pixel dimensions, or to a print size in inches/centimetres at any DPI.") {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -205,10 +219,10 @@ fun ResizeImageScreen(state: AppState) {
                     val d = dims
                     if (d != null) Text("Current size: ${d.first} × ${d.second} px", fontSize = 12.5.sp, color = MutedText)
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        listOf(true to "By Percent", false to "Exact Pixels").forEach { (pm, label) ->
+                        listOf(0 to "By Percent", 1 to "Exact Pixels", 2 to "Print Size (in/cm + DPI)").forEach { (pm, label) ->
                             FilterChip(
-                                selected = percentMode == pm,
-                                onClick = { percentMode = pm },
+                                selected = mode == pm,
+                                onClick = { mode = pm },
                                 label = { Text(label, fontSize = 12.5.sp) },
                                 shape = RoundedCornerShape(20.dp),
                                 colors = FilterChipDefaults.filterChipColors(
@@ -217,7 +231,7 @@ fun ResizeImageScreen(state: AppState) {
                             )
                         }
                     }
-                    if (percentMode) {
+                    if (mode == 0) {
                         Text("Scale: ${percent.toInt()}%", fontSize = 13.sp, color = NavyText)
                         Slider(value = percent, onValueChange = { percent = it }, valueRange = 5f..200f)
                         if (d != null) {
@@ -226,7 +240,7 @@ fun ResizeImageScreen(state: AppState) {
                                 fontSize = 12.5.sp, color = MutedText
                             )
                         }
-                    } else {
+                    } else if (mode == 1) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
                                 value = widthIn,
@@ -259,32 +273,116 @@ fun ResizeImageScreen(state: AppState) {
                                 Text("Keep aspect", fontSize = 12.sp)
                             }
                         }
+                    } else {
+                        // Print size: inches or centimetres at a chosen DPI.
+                        // The pixel size is computed from the physical size,
+                        // and the DPI is stamped into the downloaded file.
+                        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                            listOf("in" to "Inches", "cm" to "Centimetres").forEach { (u, label) ->
+                                FilterChip(
+                                    selected = physUnit == u,
+                                    onClick = { physUnit = u },
+                                    label = { Text(label, fontSize = 12.5.sp) },
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                    )
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = physW,
+                                onValueChange = { physW = it.filter { c -> c.isDigit() || c == '.' }.take(7) },
+                                label = { Text(if (physUnit == "in") "Width (in)" else "Width (cm)") },
+                                singleLine = true, shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = physH,
+                                onValueChange = { physH = it.filter { c -> c.isDigit() || c == '.' }.take(7) },
+                                label = { Text(if (physUnit == "in") "Height (in)" else "Height (cm)") },
+                                singleLine = true, shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = dpiIn,
+                                onValueChange = { dpiIn = it.filter { c -> c.isDigit() }.take(4) },
+                                label = { Text("DPI") },
+                                singleLine = true, shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(0.7f)
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                            listOf("image/png" to "PNG", "image/jpeg" to "JPG").forEach { (fm, label) ->
+                                FilterChip(
+                                    selected = physFormat == fm,
+                                    onClick = { physFormat = fm },
+                                    label = { Text(label, fontSize = 12.5.sp) },
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                    )
+                                )
+                            }
+                        }
+                        val dpiNow = dpiIn.toIntOrNull() ?: 300
+                        val pwPx = physToPx(physW, physUnit, dpiNow)
+                        val phPx = physToPx(physH, physUnit, dpiNow)
+                        if (pwPx > 0 && phPx > 0) {
+                            Text("= $pwPx × $phPx px at $dpiNow DPI — the DPI is saved inside the file.",
+                                fontSize = 12.5.sp, color = MutedText)
+                        } else {
+                            Text("Example: a 2 × 2 inch photo at 300 DPI = 600 × 600 px.",
+                                fontSize = 12.5.sp, color = MutedText)
+                        }
                     }
                     PrimaryToolButton("Resize Image", enabled = file != null && dims != null, busy = busy) {
                         val f = file ?: return@PrimaryToolButton
                         val dd = dims ?: return@PrimaryToolButton
                         val tw: Int; val th: Int
-                        if (percentMode) {
+                        if (mode == 0) {
                             tw = (dd.first * percent / 100).toInt().coerceAtLeast(1)
                             th = (dd.second * percent / 100).toInt().coerceAtLeast(1)
-                        } else {
+                        } else if (mode == 1) {
                             tw = widthIn.toIntOrNull() ?: 0
                             th = heightIn.toIntOrNull() ?: 0
                             if (tw < 1 || th < 1) { state.toast("Enter valid dimensions"); return@PrimaryToolButton }
+                        } else {
+                            val dpiV = (dpiIn.toIntOrNull() ?: 300).coerceIn(10, 2400)
+                            tw = physToPx(physW, physUnit, dpiV)
+                            th = physToPx(physH, physUnit, dpiV)
+                            if (tw < 1 || th < 1) { state.toast("Enter the print width and height"); return@PrimaryToolButton }
                         }
                         busy = true
                         scope.launch {
                             val dataUrl = loadFileDataUrl(f)
                             if (dataUrl == null) { busy = false; state.toast("Could not read that file"); return@launch }
-                            imgOp("resize", "{\"dataUrl\":\"$dataUrl\",\"w\":$tw,\"h\":$th}")
-                            val res = awaitAsync("img", 60_000)
-                            busy = false
-                            if (res != null && res.asyncOk()) {
-                                resultUrl = res.asyncStr("dataUrl")
-                                resultDims = "${res.asyncStr("w")} × ${res.asyncStr("h")} px"
-                                recordHistory("Resize Image", "Image resized", resultDims ?: "")
+                            if (mode == 2) {
+                                val dpiV = (dpiIn.toIntOrNull() ?: 300).coerceIn(10, 2400)
+                                imgOp("resizeDpi", "{\"dataUrl\":\"$dataUrl\",\"w\":$tw,\"h\":$th,\"dpi\":$dpiV,\"mime\":\"$physFormat\"}")
+                                val res = awaitAsync("img", 60_000)
+                                busy = false
+                                if (res != null && res.asyncOk()) {
+                                    resultUrl = res.asyncStr("dataUrl")
+                                    resultMime = physFormat
+                                    resultDims = "${res.asyncStr("w")} × ${res.asyncStr("h")} px · ${res.asyncStr("dpi")} DPI"
+                                    recordHistory("Resize Image", "Image resized to print size", resultDims ?: "")
+                                } else {
+                                    state.toast(res?.asyncError() ?: "Resize failed")
+                                }
                             } else {
-                                state.toast(res?.asyncError() ?: "Resize failed")
+                                imgOp("resize", "{\"dataUrl\":\"$dataUrl\",\"w\":$tw,\"h\":$th}")
+                                val res = awaitAsync("img", 60_000)
+                                busy = false
+                                if (res != null && res.asyncOk()) {
+                                    resultUrl = res.asyncStr("dataUrl")
+                                    resultMime = "image/png"
+                                    resultDims = "${res.asyncStr("w")} × ${res.asyncStr("h")} px"
+                                    recordHistory("Resize Image", "Image resized", resultDims ?: "")
+                                } else {
+                                    state.toast(res?.asyncError() ?: "Resize failed")
+                                }
                             }
                         }
                     }
@@ -299,8 +397,9 @@ fun ResizeImageScreen(state: AppState) {
                         if (resultDims != null) Text("Result: $resultDims", fontSize = 12.5.sp, color = MutedText)
                         Button(
                             onClick = {
-                                val name = (file?.name?.substringBeforeLast(".") ?: "image") + "-resized.png"
-                                downloadFileBase64(name, resultUrl!!.substringAfter(",", ""), "image/png")
+                                val ext = if (resultMime == "image/jpeg") "jpg" else "png"
+                                val name = (file?.name?.substringBeforeLast(".") ?: "image") + "-resized.$ext"
+                                downloadFileBase64(name, resultUrl!!.substringAfter(",", ""), resultMime)
                                 state.toast("Downloaded $name")
                             },
                             shape = RoundedCornerShape(11.dp),

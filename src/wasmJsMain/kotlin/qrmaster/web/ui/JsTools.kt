@@ -2,6 +2,7 @@ package qrmaster.web.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -448,12 +449,19 @@ fun FileDropCollector(
     current: () -> List<WebFile>,
     onFiles: (List<WebFile>, String?) -> Unit
 ) {
+    // The polling effect runs for the screen's whole lifetime, so it must
+    // always read the LATEST current/onFiles. Capturing the first
+    // composition's lambdas made every later drop REPLACE the file list
+    // with just the new batch (the stale lambda still saw the initial
+    // empty list) — sequential drag-and-drop adds lost earlier files.
+    val currentState = rememberUpdatedState(current)
+    val onFilesState = rememberUpdatedState(onFiles)
     LaunchedEffect(spec) {
         while (true) {
             val metas = parseFileMetas(pollDroppedQueue())
             if (metas.isNotEmpty()) {
-                val (ok, err) = validateIncoming(current(), metas, spec)
-                onFiles(ok, err)
+                val (ok, err) = validateIncoming(currentState.value(), metas, spec)
+                onFilesState.value(ok, err)
             }
             delay(350)
         }

@@ -206,6 +206,12 @@ fun ScreenContent(state: AppState) {
         Screen.PercentCalc -> PercentScreen(state)
         Screen.CompressPdf -> CompressPdfScreen(state)
         Screen.CompressImage -> CompressImageScreen(state)
+        Screen.CompressKb -> CompressKbScreen(state)
+        Screen.SignatureMaker -> SignatureMakerScreen(state)
+        Screen.CropRotate -> CropFlipScreen(state)
+        Screen.JoinPhotos -> JoinPhotosScreen(state)
+        Screen.PhotoEditor -> PhotoEditorScreen(state)
+        Screen.PhotoWatermark -> PhotoWatermarkScreen(state)
         Screen.PdfEditor -> PdfEditorScreen(state)
         Screen.PassportPhoto -> PassportPhotoScreen(state)
         Screen.Bonus -> BonusScreen(state)
@@ -671,6 +677,12 @@ fun AllToolsScreen(state: AppState) {
         ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A)) { it.navigate(Screen.ImageTools) },
         ToolCardDef("Document Scanner", "", "Image Tools", IconKind.Scan, Color(0xFF2563EB)) { it.navigate(Screen.Scanner) },
         ToolCardDef("Compress Image", "", "Image Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressImage) },
+        ToolCardDef("Compress to KB", "", "Image Tools", IconKind.Compress, Color(0xFFC2410C)) { it.navigate(Screen.CompressKb) },
+        ToolCardDef("Signature Maker", "", "Image Tools", IconKind.Edit, Color(0xFF1D4ED8)) { it.navigate(Screen.SignatureMaker) },
+        ToolCardDef("Crop & Flip", "", "Image Tools", IconKind.Swap, Color(0xFF0891B2)) { it.navigate(Screen.CropRotate) },
+        ToolCardDef("Join Photos", "", "Image Tools", IconKind.Grid, Color(0xFF059669)) { it.navigate(Screen.JoinPhotos) },
+        ToolCardDef("Photo Editor", "", "Image Tools", IconKind.Star, Color(0xFFDB2777)) { it.navigate(Screen.PhotoEditor) },
+        ToolCardDef("Photo Watermark", "", "Image Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.navigate(Screen.PhotoWatermark) },
         ToolCardDef("Remove BG", "", "Image Tools", IconKind.Star, Color(0xFF9333EA)) { it.navigate(Screen.RemoveBg) },
         ToolCardDef("Passport Photo", "", "Image Tools", IconKind.Users, Color(0xFF0284C7)) { it.navigate(Screen.PassportPhoto) },
         ToolCardDef("Resize Image", "", "Image Tools", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },

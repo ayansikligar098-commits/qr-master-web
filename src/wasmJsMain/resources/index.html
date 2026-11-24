@@ -595,6 +595,312 @@
                         if (result.length <= 700000) break;
                     }
                     qmSetAsync(key, { ok: true, b64: result, len: result.length });
+                } else if (op === 'targetSize') {
+                    // Compress to an exact KB target: try the full size at
+                    // descending qualities, then step the dimensions down,
+                    // until the REAL encoded bytes fit the target (measured
+                    // via toBlob, never estimated). Same search idea as the
+                    // MIT browser-image-compression library; this code is
+                    // our own, written for this site.
+                    var tsMime = args.mime === 'image/webp' ? 'image/webp' : 'image/jpeg';
+                    var tsTarget = Math.max(5, args.targetKB || 50) * 1024;
+                    var tsQuals = [0.92, 0.85, 0.78, 0.7, 0.62, 0.55, 0.48, 0.4, 0.33, 0.26, 0.2, 0.14, 0.08, 0.05];
+                    function tsEncode(cv, q) {
+                        return new Promise(function (res) { cv.toBlob(function (b) { res(b); }, tsMime, q); });
+                    }
+                    function tsDraw(sc) {
+                        var cv = document.createElement('canvas');
+                        cv.width = Math.max(8, Math.round(img.naturalWidth * sc));
+                        cv.height = Math.max(8, Math.round(img.naturalHeight * sc));
+                        var cx = cv.getContext('2d');
+                        cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cv.width, cv.height);
+                        cx.drawImage(img, 0, 0, cv.width, cv.height);
+                        return cv;
+                    }
+                    var tsBest = null, tsScale = 1;
+                    while (true) {
+                        var tsCv = tsDraw(tsScale);
+                        var tsHit = null, tsLast = null;
+                        for (var tq = 0; tq < tsQuals.length; tq++) {
+                            var tb2 = await tsEncode(tsCv, tsQuals[tq]);
+                            if (!tb2) continue;
+                            tsLast = tb2;
+                            if (tb2.size <= tsTarget) { tsHit = tb2; break; }
+                        }
+                        if (tsHit) { tsBest = { blob: tsHit, w: tsCv.width, h: tsCv.height, met: true }; break; }
+                        if (tsLast && (!tsBest || tsLast.size < tsBest.blob.size))
+                            tsBest = { blob: tsLast, w: tsCv.width, h: tsCv.height, met: false };
+                        if (Math.min(tsCv.width, tsCv.height) <= 24) break;
+                        tsScale *= 0.72;
+                    }
+                    var tsUrl = await new Promise(function (res) {
+                        var r = new FileReader();
+                        r.onload = function () { res(r.result); };
+                        r.readAsDataURL(tsBest.blob);
+                    });
+                    qmSetAsync(key, { ok: true, dataUrl: tsUrl, bytes: tsBest.blob.size, w: tsBest.w, h: tsBest.h, met: tsBest.met, mime: tsMime });
+                } else if (op === 'transform') {
+                    // Crop (source-pixel rect) + rotate in 90° steps +
+                    // horizontal/vertical flip, in one pass.
+                    var trSx = Math.max(0, args.x || 0), trSy = Math.max(0, args.y || 0);
+                    var trSw = Math.min(img.naturalWidth - trSx, args.w || img.naturalWidth);
+                    var trSh = Math.min(img.naturalHeight - trSy, args.h || img.naturalHeight);
+                    if (trSw < 2 || trSh < 2) throw new Error('The crop area is too small.');
+                    var trRot = ((args.rotate || 0) % 360 + 360) % 360;
+                    var trSwap = trRot === 90 || trRot === 270;
+                    var trCv = document.createElement('canvas');
+                    trCv.width = trSwap ? trSh : trSw;
+                    trCv.height = trSwap ? trSw : trSh;
+                    var trCx = trCv.getContext('2d');
+                    if (args.mime === 'image/jpeg') { trCx.fillStyle = '#ffffff'; trCx.fillRect(0, 0, trCv.width, trCv.height); }
+                    trCx.translate(trCv.width / 2, trCv.height / 2);
+                    trCx.rotate(trRot * Math.PI / 180);
+                    trCx.scale(args.flipH ? -1 : 1, args.flipV ? -1 : 1);
+                    trCx.drawImage(img, trSx, trSy, trSw, trSh, -trSw / 2, -trSh / 2, trSw, trSh);
+                    qmSetAsync(key, { ok: true, dataUrl: trCv.toDataURL(args.mime || 'image/png', args.quality || 0.92), w: trCv.width, h: trCv.height });
+                } else if (op === 'signature') {
+                    // Extract a signature from a photo of it on paper:
+                    // Otsu threshold separates ink from paper, the result
+                    // is cropped to the ink and returned twice — on clean
+                    // white, and with a transparent background (soft edge
+                    // from the luminance ramp below the threshold).
+                    var sgCv = document.createElement('canvas');
+                    sgCv.width = img.naturalWidth; sgCv.height = img.naturalHeight;
+                    var sgCx = sgCv.getContext('2d');
+                    sgCx.drawImage(img, 0, 0);
+                    var sgData = sgCx.getImageData(0, 0, sgCv.width, sgCv.height);
+                    var sgPx = sgData.data;
+                    var sgLum = new Float32Array(sgCv.width * sgCv.height);
+                    for (var sgi = 0; sgi < sgLum.length; sgi++)
+                        sgLum[sgi] = 0.299 * sgPx[sgi * 4] + 0.587 * sgPx[sgi * 4 + 1] + 0.114 * sgPx[sgi * 4 + 2];
+                    var sgHist = new Array(256).fill(0);
+                    for (var sgj = 0; sgj < sgLum.length; sgj++)
+                        sgHist[Math.max(0, Math.min(255, Math.round(sgLum[sgj])))]++;
+                    var sgTotal = sgLum.length, sgSumAll = 0;
+                    for (var sgt = 0; sgt < 256; sgt++) sgSumAll += sgt * sgHist[sgt];
+                    var sgSumB = 0, sgWB = 0, sgMaxVar = -1, sgOtsu = 200;
+                    for (var sgt2 = 0; sgt2 < 256; sgt2++) {
+                        sgWB += sgHist[sgt2]; if (!sgWB) continue;
+                        var sgWF = sgTotal - sgWB; if (!sgWF) break;
+                        sgSumB += sgt2 * sgHist[sgt2];
+                        var sgMB = sgSumB / sgWB, sgMF = (sgSumAll - sgSumB) / sgWF;
+                        var sgBetween = sgWB * sgWF * (sgMB - sgMF) * (sgMB - sgMF);
+                        if (sgBetween > sgMaxVar) { sgMaxVar = sgBetween; sgOtsu = sgt2; }
+                    }
+                    var sgThr = args.threshold != null ? args.threshold : Math.max(90, Math.min(235, sgOtsu));
+                    var sgMinX = sgCv.width, sgMinY = sgCv.height, sgMaxX = -1, sgMaxY = -1, sgInk = 0;
+                    for (var sgy = 0; sgy < sgCv.height; sgy++) {
+                        for (var sgx = 0; sgx < sgCv.width; sgx++) {
+                            if (sgLum[sgy * sgCv.width + sgx] < sgThr) {
+                                sgInk++;
+                                if (sgx < sgMinX) sgMinX = sgx;
+                                if (sgx > sgMaxX) sgMaxX = sgx;
+                                if (sgy < sgMinY) sgMinY = sgy;
+                                if (sgy > sgMaxY) sgMaxY = sgy;
+                            }
+                        }
+                    }
+                    if (sgMaxX < 0 || sgInk < 20) throw new Error('No signature found — try a darker pen, plainer paper or better light.');
+                    var sgPad = Math.round(Math.max(sgMaxX - sgMinX, sgMaxY - sgMinY) * 0.04) + 2;
+                    sgMinX = Math.max(0, sgMinX - sgPad); sgMinY = Math.max(0, sgMinY - sgPad);
+                    sgMaxX = Math.min(sgCv.width - 1, sgMaxX + sgPad); sgMaxY = Math.min(sgCv.height - 1, sgMaxY + sgPad);
+                    var sgBw = sgMaxX - sgMinX + 1, sgBh = sgMaxY - sgMinY + 1;
+                    function sgRender(transparent) {
+                        var c2 = document.createElement('canvas');
+                        c2.width = sgBw; c2.height = sgBh;
+                        var cx2 = c2.getContext('2d');
+                        var id = cx2.createImageData(sgBw, sgBh);
+                        var soft = 42;
+                        for (var yy = 0; yy < sgBh; yy++) {
+                            for (var xx = 0; xx < sgBw; xx++) {
+                                var si = (sgMinY + yy) * sgCv.width + (sgMinX + xx);
+                                var oi = (yy * sgBw + xx) * 4;
+                                var L = sgLum[si];
+                                var a = L >= sgThr ? 0 : (L <= sgThr - soft ? 255 : Math.round((sgThr - L) / soft * 255));
+                                if (transparent) {
+                                    id.data[oi] = sgPx[si * 4]; id.data[oi + 1] = sgPx[si * 4 + 1]; id.data[oi + 2] = sgPx[si * 4 + 2];
+                                    id.data[oi + 3] = a;
+                                } else {
+                                    var af = a / 255;
+                                    id.data[oi] = Math.round(sgPx[si * 4] * af + 255 * (1 - af));
+                                    id.data[oi + 1] = Math.round(sgPx[si * 4 + 1] * af + 255 * (1 - af));
+                                    id.data[oi + 2] = Math.round(sgPx[si * 4 + 2] * af + 255 * (1 - af));
+                                    id.data[oi + 3] = 255;
+                                }
+                            }
+                        }
+                        cx2.putImageData(id, 0, 0);
+                        return c2.toDataURL('image/png');
+                    }
+                    qmSetAsync(key, { ok: true, white: sgRender(false), transparent: sgRender(true), w: sgBw, h: sgBh, threshold: Math.round(sgThr) });
+                } else if (op === 'join') {
+                    // Join 2+ photos: side-by-side (shared height), stacked
+                    // (shared width) or a 2-column grid, with a gap.
+                    var jnImgs = [];
+                    for (var jnI = 0; jnI < (args.images || []).length; jnI++)
+                        jnImgs.push(await qmLoadImage(args.images[jnI]));
+                    if (jnImgs.length < 2) throw new Error('Add at least two photos to join.');
+                    var jnGap = args.gap != null ? args.gap : 10;
+                    var jnBg = args.bg || '#ffffff';
+                    var jnLayout = args.layout || 'h';
+                    var jnCells = [], jnW = 0, jnH = 0, jnGw = 0, jnRows = 0, jnRowH = [];
+                    if (jnLayout === 'h') {
+                        var jnTh = Math.min.apply(null, jnImgs.map(function (im) { return im.naturalHeight; }));
+                        jnImgs.forEach(function (im) {
+                            jnCells.push({ img: im, w: Math.round(im.naturalWidth * jnTh / im.naturalHeight), h: jnTh });
+                        });
+                        jnW = jnCells.reduce(function (sm, c) { return sm + c.w; }, 0) + jnGap * (jnCells.length - 1);
+                        jnH = jnTh;
+                    } else if (jnLayout === 'v') {
+                        var jnTw = Math.min.apply(null, jnImgs.map(function (im) { return im.naturalWidth; }));
+                        jnImgs.forEach(function (im) {
+                            jnCells.push({ img: im, w: jnTw, h: Math.round(im.naturalHeight * jnTw / im.naturalWidth) });
+                        });
+                        jnW = jnTw;
+                        jnH = jnCells.reduce(function (sm, c) { return sm + c.h; }, 0) + jnGap * (jnCells.length - 1);
+                    } else {
+                        jnGw = Math.min.apply(null, jnImgs.map(function (im) { return im.naturalWidth; }));
+                        jnImgs.forEach(function (im) {
+                            jnCells.push({ img: im, w: jnGw, h: Math.round(im.naturalHeight * jnGw / im.naturalWidth) });
+                        });
+                        jnRows = Math.ceil(jnCells.length / 2);
+                        for (var jnR = 0; jnR < jnRows; jnR++) {
+                            var jnRh = 0;
+                            for (var jnC = 0; jnC < 2; jnC++) {
+                                var jnCell = jnCells[jnR * 2 + jnC];
+                                if (jnCell) jnRh = Math.max(jnRh, jnCell.h);
+                            }
+                            jnRowH.push(jnRh);
+                        }
+                        jnW = jnGw * 2 + jnGap;
+                        jnH = jnRowH.reduce(function (sm, v) { return sm + v; }, 0) + jnGap * (jnRows - 1);
+                    }
+                    var jnCv = document.createElement('canvas');
+                    jnCv.width = jnW; jnCv.height = jnH;
+                    var jnCx = jnCv.getContext('2d');
+                    jnCx.fillStyle = jnBg; jnCx.fillRect(0, 0, jnW, jnH);
+                    if (jnLayout === 'h') {
+                        var jnX = 0;
+                        jnCells.forEach(function (c) { jnCx.drawImage(c.img, jnX, 0, c.w, c.h); jnX += c.w + jnGap; });
+                    } else if (jnLayout === 'v') {
+                        var jnY = 0;
+                        jnCells.forEach(function (c) { jnCx.drawImage(c.img, 0, jnY, c.w, c.h); jnY += c.h + jnGap; });
+                    } else {
+                        var jnGy = 0;
+                        for (var jnR2 = 0; jnR2 < jnRows; jnR2++) {
+                            var jnGx = 0;
+                            for (var jnC2 = 0; jnC2 < 2; jnC2++) {
+                                var jnCell2 = jnCells[jnR2 * 2 + jnC2];
+                                if (jnCell2) jnCx.drawImage(jnCell2.img, jnGx, jnGy, jnCell2.w, jnCell2.h);
+                                jnGx += jnGw + jnGap;
+                            }
+                            jnGy += jnRowH[jnR2] + jnGap;
+                        }
+                    }
+                    qmSetAsync(key, { ok: true, dataUrl: jnCv.toDataURL(args.mime || 'image/png', 0.92), w: jnW, h: jnH });
+                } else if (op === 'edit') {
+                    // Light photo editor: brightness / contrast / saturation
+                    // (+ black & white, sepia, warm/cool) applied per pixel,
+                    // then an optional text overlay. Our own code on the
+                    // standard Canvas API — no editor library.
+                    var edCv = document.createElement('canvas');
+                    edCv.width = img.naturalWidth; edCv.height = img.naturalHeight;
+                    var edCx = edCv.getContext('2d');
+                    edCx.drawImage(img, 0, 0);
+                    var edImg = edCx.getImageData(0, 0, edCv.width, edCv.height);
+                    var edPx = edImg.data;
+                    var edB = (args.brightness || 0) / 100;
+                    var edS = (args.saturation || 0) / 100;
+                    var edWarm = (args.warmth || 0) / 100;
+                    var edC255 = Math.max(-200, Math.min(200, (args.contrast || 0) * 2));
+                    var edCf = (259 * (edC255 + 255)) / (255 * (259 - edC255));
+                    var edGray = !!args.grayscale, edSepia = !!args.sepia;
+                    for (var edI = 0; edI < edPx.length; edI += 4) {
+                        var edR = edPx[edI], edG = edPx[edI + 1], edBl = edPx[edI + 2];
+                        edR = edCf * (edR - 128) + 128 + edB * 255;
+                        edG = edCf * (edG - 128) + 128 + edB * 255;
+                        edBl = edCf * (edBl - 128) + 128 + edB * 255;
+                        var edLum = 0.299 * edR + 0.587 * edG + 0.114 * edBl;
+                        var edSatF = 1 + edS;
+                        edR = edLum + (edR - edLum) * edSatF;
+                        edG = edLum + (edG - edLum) * edSatF;
+                        edBl = edLum + (edBl - edLum) * edSatF;
+                        if (edGray) { var edGg = 0.299 * edR + 0.587 * edG + 0.114 * edBl; edR = edG = edBl = edGg; }
+                        if (edSepia) {
+                            var edSr = 0.393 * edR + 0.769 * edG + 0.189 * edBl;
+                            var edSg = 0.349 * edR + 0.686 * edG + 0.168 * edBl;
+                            var edSb = 0.272 * edR + 0.534 * edG + 0.131 * edBl;
+                            edR = edSr; edG = edSg; edBl = edSb;
+                        }
+                        if (edWarm) { edR += edWarm * 18; edBl -= edWarm * 18; }
+                        edPx[edI] = Math.max(0, Math.min(255, edR));
+                        edPx[edI + 1] = Math.max(0, Math.min(255, edG));
+                        edPx[edI + 2] = Math.max(0, Math.min(255, edBl));
+                    }
+                    edCx.putImageData(edImg, 0, 0);
+                    if (args.text) {
+                        var edSize = args.textSize || Math.max(14, Math.round(edCv.width * 0.045));
+                        edCx.font = '700 ' + edSize + 'px Arial, sans-serif';
+                        edCx.fillStyle = args.textColor || '#111827';
+                        edCx.textBaseline = 'middle';
+                        var edFx = args.textX != null ? args.textX : 0.5;
+                        edCx.textAlign = edFx <= 0.05 ? 'left' : edFx >= 0.95 ? 'right' : 'center';
+                        edCx.fillText(args.text, edFx * edCv.width,
+                            (args.textY != null ? args.textY : 0.92) * edCv.height);
+                    }
+                    qmSetAsync(key, { ok: true, dataUrl: edCv.toDataURL(args.mime || 'image/png', args.quality || 0.92), w: edCv.width, h: edCv.height });
+                } else if (op === 'imgWatermark') {
+                    var iwCv = document.createElement('canvas');
+                    iwCv.width = img.naturalWidth; iwCv.height = img.naturalHeight;
+                    var iwCx = iwCv.getContext('2d');
+                    iwCx.drawImage(img, 0, 0);
+                    var iwTxt = (args.text || '').trim();
+                    if (!iwTxt) throw new Error('Enter the watermark text first.');
+                    var iwSize = args.size || Math.max(13, Math.round(Math.min(iwCv.width, iwCv.height) * 0.055));
+                    iwCx.font = '700 ' + iwSize + 'px Arial, sans-serif';
+                    iwCx.fillStyle = args.color || '#ffffff';
+                    iwCx.globalAlpha = args.opacity != null ? args.opacity : 0.55;
+                    iwCx.textBaseline = 'middle';
+                    if (args.tile) {
+                        iwCx.save();
+                        iwCx.translate(iwCv.width / 2, iwCv.height / 2);
+                        iwCx.rotate(-0.5);
+                        iwCx.textAlign = 'center';
+                        var iwStepX = Math.max(60, iwCx.measureText(iwTxt).width + iwSize * 2.2);
+                        var iwStepY = iwSize * 4.2;
+                        var iwR = Math.ceil(Math.max(iwCv.width, iwCv.height) / iwStepY) + 1;
+                        var iwCols = Math.ceil(Math.max(iwCv.width, iwCv.height) / iwStepX) + 1;
+                        for (var iwY2 = -iwR; iwY2 <= iwR; iwY2++)
+                            for (var iwX2 = -iwCols; iwX2 <= iwCols; iwX2++)
+                                iwCx.fillText(iwTxt, iwX2 * iwStepX, iwY2 * iwStepY);
+                        iwCx.restore();
+                    } else {
+                        var iwPos = args.position || 'bottom-right';
+                        var iwPad = Math.round(iwSize * 0.9);
+                        var iwTw = iwCx.measureText(iwTxt).width;
+                        var iwX = iwPos.indexOf('left') >= 0 ? iwPad
+                            : iwPos.indexOf('right') >= 0 ? iwCv.width - iwPad - iwTw
+                            : (iwCv.width - iwTw) / 2;
+                        var iwY = iwPos.indexOf('top') >= 0 ? iwPad + iwSize / 2
+                            : iwPos.indexOf('bottom') >= 0 ? iwCv.height - iwPad - iwSize / 2
+                            : iwCv.height / 2;
+                        iwCx.textAlign = 'left';
+                        iwCx.fillText(iwTxt, iwX, iwY);
+                    }
+                    iwCx.globalAlpha = 1;
+                    qmSetAsync(key, { ok: true, dataUrl: iwCv.toDataURL(args.mime || 'image/png', 0.92), w: iwCv.width, h: iwCv.height });
+                } else if (op === 'resizeDpi') {
+                    // Resize to exact pixels and stamp the physical DPI
+                    // into the file (PNG pHYs / JPEG JFIF), so print and
+                    // form-portal size checks see the intended size.
+                    var rdCv = document.createElement('canvas');
+                    rdCv.width = args.w; rdCv.height = args.h;
+                    var rdCx = rdCv.getContext('2d');
+                    var rdMime = args.mime === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+                    if (rdMime === 'image/jpeg') { rdCx.fillStyle = '#ffffff'; rdCx.fillRect(0, 0, rdCv.width, rdCv.height); }
+                    rdCx.drawImage(img, 0, 0, rdCv.width, rdCv.height);
+                    var rdUrl = qmSetDpi(rdCv.toDataURL(rdMime, 0.95), rdMime, args.dpi || 300);
+                    qmSetAsync(key, { ok: true, dataUrl: rdUrl, w: rdCv.width, h: rdCv.height, dpi: args.dpi || 300 });
                 } else {
                     throw new Error('Unknown image operation.');
                 }
@@ -1722,7 +2028,7 @@
         }
         return 'data:' + mime + ';base64,' + btoa(bin);
     }
-    function qmSetDpi300(dataUrl, mime) {
+    function qmSetDpi(dataUrl, mime, dpi) {
         try {
             var bytes = qmDataUrlToBytes(dataUrl);
             if (mime === 'image/png' && bytes.length > 40 &&
@@ -1734,7 +2040,7 @@
                     var len = ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
                     var type = String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
                     if (type === 'pHYs' && len === 9) {
-                        var ppm = 11811;
+                        var ppm = Math.round(dpi / 0.0254);
                         bytes[off + 8] = (ppm >>> 24) & 255; bytes[off + 9] = (ppm >>> 16) & 255;
                         bytes[off + 10] = (ppm >>> 8) & 255; bytes[off + 11] = ppm & 255;
                         bytes[off + 12] = (ppm >>> 24) & 255; bytes[off + 13] = (ppm >>> 16) & 255;
@@ -1752,7 +2058,7 @@
                 if (!patched) {
                     // Insert a fresh pHYs right after IHDR (offset 33).
                     var chunk = new Uint8Array(21);
-                    var ppmv = 11811;
+                    var ppmv = Math.round(dpi / 0.0254);
                     chunk[3] = 9;
                     chunk[4] = 0x70; chunk[5] = 0x48; chunk[6] = 0x59; chunk[7] = 0x73; // pHYs
                     chunk[8] = (ppmv >>> 24) & 255; chunk[9] = (ppmv >>> 16) & 255;
@@ -1778,12 +2084,12 @@
                     // length(2) "JFIF\0"(5) version(2) → units at 13,
                     // Xdensity at 14-15, Ydensity at 16-17.
                     bytes[13] = 1;
-                    bytes[14] = 300 >>> 8; bytes[15] = 300 & 255;
-                    bytes[16] = 300 >>> 8; bytes[17] = 300 & 255;
+                    bytes[14] = (dpi >>> 8) & 255; bytes[15] = dpi & 255;
+                    bytes[16] = (dpi >>> 8) & 255; bytes[17] = dpi & 255;
                 } else {
                     // No JFIF header — insert a minimal APP0 after SOI.
                     var app0 = new Uint8Array([0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00,
-                        0x01, 0x01, 0x01, 0x01, 0x2C, 0x01, 0x2C, 0x00, 0x00]);
+                        0x01, 0x01, 0x01, (dpi >>> 8) & 255, dpi & 255, (dpi >>> 8) & 255, dpi & 255, 0x00, 0x00]);
                     var out2 = new Uint8Array(bytes.length + app0.length);
                     out2.set(bytes.subarray(0, 2), 0);
                     out2.set(app0, 2);
@@ -1795,6 +2101,7 @@
         } catch (e) { /* density is best-effort; never fail a render over it */ }
         return dataUrl;
     }
+    function qmSetDpi300(dataUrl, mime) { return qmSetDpi(dataUrl, mime, 300); }
     window.__qmPassportOp = function (op, argsJson, key) {
         window.__qmAsync[key] = '';
         (async function () {
