@@ -45,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -661,7 +662,10 @@ fun AllToolsScreen(state: AppState) {
         ToolCardDef("Merge PDF", "", "PDF Tools", IconKind.Merge, Color(0xFFDC2626)) { it.openPdf("Merge PDF") },
         ToolCardDef("Split PDF", "", "PDF Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.openPdf("Split PDF") },
         ToolCardDef("Compress PDF", "", "PDF Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
-        ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2)) { it.openPdf("Rotate PDF") }
+        ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2)) { it.openPdf("Rotate PDF") },
+        ToolCardDef("Watermark PDF", "", "PDF Tools", IconKind.Star, Color(0xFF9333EA)) { it.openPdf("Watermark") },
+        ToolCardDef("Page Numbers", "", "PDF Tools", IconKind.FileText, Color(0xFF2563EB)) { it.openPdf("Page Numbers") },
+        ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B)) { it.openPdf("PDF Metadata") }
     )
     val imageTools = listOf(
         ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A)) { it.navigate(Screen.ImageTools) },
@@ -1108,6 +1112,10 @@ private suspend fun ensurePdfLibsReady(): String? {
     return if (status == "ready") null else "The PDF engine is still loading. Try again in a moment."
 }
 
+/** Minimal JSON string escaping for hand-built op arguments. */
+private fun pdfJsonEsc(s: String): String =
+    s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
+
 private fun parsePageRange(input: String, total: Int): List<Int> {
     val out = mutableSetOf<Int>()
     for (part in input.split(",")) {
@@ -1141,11 +1149,27 @@ fun PdfConverterScreen(state: AppState) {
     var pageImages by remember { mutableStateOf<List<String>>(emptyList()) }
     var pageBitmaps by remember { mutableStateOf<Map<Int, ImageBitmap>>(emptyMap()) }
     var pageCount by remember { mutableStateOf<Int?>(null) }
+    // Watermark tool state
+    var wmText by remember { mutableStateOf("") }
+    var wmOpacity by remember { mutableStateOf(0.16f) }
+    var wmColor by remember { mutableStateOf("#7C3AED") }
+    // Page Numbers tool state
+    var pnPosition by remember { mutableStateOf("bottom-centre") }
+    var pnStyle by remember { mutableStateOf("plain") }
+    var pnStart by remember { mutableStateOf("1") }
+    // PDF Metadata tool state
+    var metaTitle by remember { mutableStateOf("") }
+    var metaAuthor by remember { mutableStateOf("") }
+    var metaSubject by remember { mutableStateOf("") }
+    var metaKeywords by remember { mutableStateOf("") }
+    var metaCreator by remember { mutableStateOf("") }
+    var metaProducer by remember { mutableStateOf("") }
+    var metaLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.pdfTool) {
         if (state.pdfTool == "Compress PDF") {
             state.navigate(Screen.CompressPdf)
-        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF")) {
+        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata")) {
             selectedTool = state.pdfTool
         } else {
             selectedTool = "Merge PDF"
@@ -1188,6 +1212,25 @@ fun PdfConverterScreen(state: AppState) {
         pageCount = null
         if (selectedTool != "Images to PDF" && files.isNotEmpty()) loadFirstPdfCount()
     }
+    // PDF Metadata: read the file's current metadata into the form.
+    LaunchedEffect(files.firstOrNull()?.id, selectedTool) {
+        if (selectedTool == "PDF Metadata") {
+            metaLoaded = false
+            val f = files.firstOrNull() ?: return@LaunchedEffect
+            if (ensurePdfLibsReady() != null) return@LaunchedEffect
+            val b64 = loadFileBase64(f.id) ?: return@LaunchedEffect
+            val res = pdfCall("pdfMeta", "{\"pdf\":\"$b64\"}", 60_000)
+            if (res != null && res.asyncOk()) {
+                metaTitle = res.asyncStr("title")
+                metaAuthor = res.asyncStr("author")
+                metaSubject = res.asyncStr("subject")
+                metaKeywords = res.asyncStr("keywords")
+                metaCreator = res.asyncStr("creator")
+                metaProducer = res.asyncStr("producer")
+                metaLoaded = true
+            }
+        }
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -1204,7 +1247,10 @@ fun PdfConverterScreen(state: AppState) {
                     Triple("Compress PDF", IconKind.Compress, Color(0xFFEA580C)),
                     Triple("Rotate PDF", IconKind.Swap, Color(0xFF0891B2)),
                     Triple("PDF to Images", IconKind.Image, Color(0xFF2563EB)),
-                    Triple("Images to PDF", IconKind.Pdf, Color(0xFFDB2777))
+                    Triple("Images to PDF", IconKind.Pdf, Color(0xFFDB2777)),
+                    Triple("Watermark", IconKind.Star, Color(0xFF9333EA)),
+                    Triple("Page Numbers", IconKind.FileText, Color(0xFF2563EB)),
+                    Triple("PDF Metadata", IconKind.Info, Color(0xFF64748B))
                 ).forEach { (name, icon, color) ->
                     Column(
                         Modifier.width(118.dp).height(96.dp)
@@ -1268,6 +1314,113 @@ fun PdfConverterScreen(state: AppState) {
                                 }
                             }
                         }
+                        "Watermark" -> {
+                            OutlinedTextField(
+                                value = wmText,
+                                onValueChange = { wmText = it },
+                                label = { Text("Watermark text (e.g. your shop or office name)") },
+                                singleLine = true, shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Colour:", fontSize = 13.sp, color = NavyText)
+                                listOf(
+                                    "#7C3AED" to "Purple", "#2563EB" to "Blue", "#DC2626" to "Red",
+                                    "#059669" to "Green", "#111827" to "Black"
+                                ).forEach { (hex, label) ->
+                                    FilterChip(
+                                        selected = wmColor == hex,
+                                        onClick = { wmColor = hex },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                            Text("Strength: ${(wmOpacity * 100).toInt()}%", fontSize = 12.5.sp, color = MutedText)
+                            Slider(value = wmOpacity, onValueChange = { wmOpacity = it }, valueRange = 0.05f..0.5f)
+                            Text("The watermark is stamped diagonally across every page of the downloaded PDF.",
+                                fontSize = 12.sp, color = MutedText)
+                        }
+                        "Page Numbers" -> {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Position:", fontSize = 13.sp, color = NavyText)
+                                listOf(
+                                    "bottom-centre" to "Bottom Centre", "bottom-left" to "Bottom Left",
+                                    "bottom-right" to "Bottom Right", "top-centre" to "Top Centre",
+                                    "top-left" to "Top Left", "top-right" to "Top Right"
+                                ).forEach { (pos, label) ->
+                                    FilterChip(
+                                        selected = pnPosition == pos,
+                                        onClick = { pnPosition = pos },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Style:", fontSize = 13.sp, color = NavyText)
+                                listOf("plain" to "Just the number", "of" to "Page X of Y").forEach { (st, label) ->
+                                    FilterChip(
+                                        selected = pnStyle == st,
+                                        onClick = { pnStyle = st },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = pnStart,
+                                    onValueChange = { pnStart = it.filter { c -> c.isDigit() }.take(5) },
+                                    label = { Text("Start at") },
+                                    singleLine = true, shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.width(110.dp)
+                                )
+                            }
+                        }
+                        "PDF Metadata" -> {
+                            if (files.isEmpty()) {
+                                Text("Choose a PDF to see and edit its title, author, subject and keywords.",
+                                    fontSize = 12.5.sp, color = MutedText)
+                            } else if (!metaLoaded) {
+                                Text("Reading this PDF's metadata…", fontSize = 12.5.sp, color = MutedText)
+                            } else {
+                                OutlinedTextField(
+                                    value = metaTitle, onValueChange = { metaTitle = it },
+                                    label = { Text("Title") }, singleLine = true,
+                                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = metaAuthor, onValueChange = { metaAuthor = it },
+                                    label = { Text("Author") }, singleLine = true,
+                                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = metaSubject, onValueChange = { metaSubject = it },
+                                    label = { Text("Subject") }, singleLine = true,
+                                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = metaKeywords, onValueChange = { metaKeywords = it },
+                                    label = { Text("Keywords (comma separated)") }, singleLine = true,
+                                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    listOf(
+                                        if (metaCreator.isNotBlank()) "Created by: $metaCreator" else "",
+                                        if (metaProducer.isNotBlank()) "Producer: $metaProducer" else ""
+                                    ).filter { it.isNotBlank() }.joinToString("  •  ").ifBlank { "No creator/producer info in this file." },
+                                    fontSize = 12.sp, color = MutedText
+                                )
+                            }
+                        }
                     }
                     PrimaryToolButton(
                         when (selectedTool) {
@@ -1276,6 +1429,9 @@ fun PdfConverterScreen(state: AppState) {
                             "Rotate PDF" -> "Rotate PDF"
                             "PDF to Images" -> "Convert to Images"
                             "Images to PDF" -> "Create PDF"
+                            "Watermark" -> "Add Watermark"
+                            "Page Numbers" -> "Add Page Numbers"
+                            "PDF Metadata" -> "Save Metadata"
                             else -> "Process"
                         },
                         enabled = files.isNotEmpty() && (selectedTool != "Merge PDF" || files.size >= 2),
@@ -1328,6 +1484,42 @@ fun PdfConverterScreen(state: AppState) {
                                     resultName = "rotated.pdf"
                                     statusText = "Rotated ${res.asyncStr("pages")} page(s) by $angle°."
                                     recordHistory("Rotate PDF", "PDF rotated", "$angle°")
+                                }
+                            }
+                            "Watermark" -> scope.launch {
+                                if (wmText.isBlank()) { errorText = "Enter the watermark text first."; return@launch }
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                val args = "{\"pdf\":\"$b64\",\"text\":\"${pdfJsonEsc(wmText)}\",\"color\":\"$wmColor\",\"opacity\":$wmOpacity}"
+                                runOp("watermarkPdf", args) { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "watermarked.pdf"
+                                    statusText = "Watermark added to ${res.asyncStr("pages")} page(s)."
+                                    recordHistory("Watermark PDF", "Watermark added", wmText)
+                                }
+                            }
+                            "Page Numbers" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                val startAt = pnStart.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                                val args = "{\"pdf\":\"$b64\",\"startAt\":$startAt,\"style\":\"$pnStyle\",\"position\":\"$pnPosition\"}"
+                                runOp("pageNumbers", args) { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "numbered.pdf"
+                                    statusText = "Page numbers added to ${res.asyncStr("pages")} page(s)."
+                                    recordHistory("Page Numbers", "Page numbers added", "$pnPosition, from $startAt")
+                                }
+                            }
+                            "PDF Metadata" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                val args = "{\"pdf\":\"$b64\",\"title\":\"${pdfJsonEsc(metaTitle)}\",\"author\":\"${pdfJsonEsc(metaAuthor)}\"," +
+                                    "\"subject\":\"${pdfJsonEsc(metaSubject)}\",\"keywords\":\"${pdfJsonEsc(metaKeywords)}\"}"
+                                runOp("setMeta", args) { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "metadata.pdf"
+                                    statusText = "Metadata saved — download the updated PDF."
+                                    recordHistory("PDF Metadata", "Metadata updated", metaTitle)
                                 }
                             }
                             "PDF to Images" -> scope.launch {

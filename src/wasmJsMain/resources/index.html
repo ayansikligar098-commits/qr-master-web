@@ -375,6 +375,87 @@
                         urls.push(cv.toDataURL('image/png'));
                     }
                     qmSetAsync(key, { ok: true, pages: pdf.numPages, images: urls });
+                } else if (op === 'appendTo') {
+                    // Append every page of pdf2 to pdf (the PDF Editor's
+                    // "Add pages from another PDF": the combined document
+                    // becomes the editor's new single source).
+                    var adoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var bdoc = await PDFDocument.load(qmB64ToBytes(args.pdf2), { ignoreEncryption: true });
+                    var fromIdx = adoc.getPageCount();
+                    var acp = await adoc.copyPages(bdoc, bdoc.getPageIndices());
+                    acp.forEach(function (p) { adoc.addPage(p); });
+                    var abytes2 = await adoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(abytes2), pages: adoc.getPageCount(), from: fromIdx, added: bdoc.getPageCount() });
+                } else if (op === 'formFields') {
+                    var ffdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var ffields = [];
+                    try {
+                        var fform = ffdoc.getForm();
+                        fform.getFields().forEach(function (f) {
+                            var item = { name: f.getName(), type: 'other', value: '', options: [] };
+                            if (f instanceof PDFLib.PDFTextField) { item.type = 'text'; item.value = f.getText() || ''; }
+                            else if (f instanceof PDFLib.PDFCheckBox) { item.type = 'checkbox'; item.value = f.isChecked() ? 'true' : 'false'; }
+                            else if (f instanceof PDFLib.PDFRadioGroup) { item.type = 'radio'; item.value = f.getSelected() || ''; item.options = f.getOptions(); }
+                            else if (f instanceof PDFLib.PDFDropdown) { item.type = 'dropdown'; var ds = f.getSelected(); item.value = (ds && ds.length) ? ds[0] : ''; item.options = f.getOptions(); }
+                            else if (f instanceof PDFLib.PDFOptionList) { item.type = 'dropdown'; var os2 = f.getSelected(); item.value = (os2 && os2.length) ? os2[0] : ''; item.options = f.getOptions(); }
+                            else if (f instanceof PDFLib.PDFSignature) { item.type = 'signature'; }
+                            else if (f instanceof PDFLib.PDFButton) { item.type = 'button'; }
+                            ffields.push(item);
+                        });
+                    } catch (e) { /* a PDF without a form yields an empty list */ }
+                    qmSetAsync(key, { ok: true, fields: ffields, pages: ffdoc.getPageCount() });
+                } else if (op === 'watermarkPdf') {
+                    var wdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var wtxt = (args.text || '').trim();
+                    if (!wtxt) throw new Error('Enter the watermark text first.');
+                    var wpng = qmTextPng(wtxt, 54, args.color || '#7C3AED', true, -30,
+                        args.opacity == null ? 0.16 : args.opacity);
+                    if (!wpng) throw new Error('The watermark could not be rendered.');
+                    var wimg2 = await wdoc.embedPng(wpng.dataUrl);
+                    wdoc.getPages().forEach(function (pg) {
+                        var sz = pg.getSize();
+                        var ww = sz.width * 0.94, wh = ww * (wpng.h / wpng.w);
+                        if (wh > sz.height * 0.8) { wh = sz.height * 0.8; ww = wh * (wpng.w / wpng.h); }
+                        pg.drawImage(wimg2, { x: (sz.width - ww) / 2, y: (sz.height - wh) / 2, width: ww, height: wh });
+                    });
+                    var wbytes = await wdoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(wbytes), pages: wdoc.getPageCount() });
+                } else if (op === 'pageNumbers') {
+                    var ndoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var nfont = await ndoc.embedFont(PDFLib.StandardFonts.Helvetica);
+                    var ntotal = ndoc.getPageCount();
+                    var nstart = parseInt(args.startAt, 10); if (!(nstart >= 1)) nstart = 1;
+                    var nstyle = args.style === 'of' ? 'of' : 'plain';
+                    var npos = args.position || 'bottom-centre';
+                    ndoc.getPages().forEach(function (pg, i) {
+                        var num = nstart + i;
+                        var txt = nstyle === 'of' ? ('Page ' + num + ' of ' + (nstart + ntotal - 1)) : ('' + num);
+                        var sz = pg.getSize();
+                        var tw = nfont.widthOfTextAtSize(txt, 10);
+                        var x = npos === 'bottom-left' || npos === 'top-left' ? 36
+                            : npos === 'bottom-right' || npos === 'top-right' ? sz.width - 36 - tw
+                            : (sz.width - tw) / 2;
+                        var y = npos.indexOf('top') === 0 ? sz.height - 28 : 22;
+                        pg.drawText(txt, { x: x, y: y, size: 10, font: nfont, color: PDFLib.rgb(0.38, 0.38, 0.38) });
+                    });
+                    var nbytes = await ndoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(nbytes), pages: ntotal });
+                } else if (op === 'pdfMeta') {
+                    var mdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var mkw = [];
+                    try { mkw = mdoc.getKeywords() || []; } catch (e) { mkw = []; }
+                    qmSetAsync(key, { ok: true, pages: mdoc.getPageCount(),
+                        title: mdoc.getTitle() || '', author: mdoc.getAuthor() || '',
+                        subject: mdoc.getSubject() || '', keywords: mkw.join(', '),
+                        creator: mdoc.getCreator() || '', producer: mdoc.getProducer() || '' });
+                } else if (op === 'setMeta') {
+                    var sdoc2 = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    if (args.title != null) sdoc2.setTitle(args.title);
+                    if (args.author != null) sdoc2.setAuthor(args.author);
+                    if (args.subject != null) sdoc2.setSubject(args.subject);
+                    if (args.keywords != null) sdoc2.setKeywords(args.keywords.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length; }));
+                    var sbytes2 = await sdoc2.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(sbytes2), pages: sdoc2.getPageCount() });
                 } else {
                     throw new Error('Unknown PDF operation.');
                 }
@@ -965,7 +1046,37 @@
     }
 
     async function qmEditorExport(args) {
-        var src = await PDFLib.PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+        var srcBytes = qmB64ToBytes(args.pdf);
+        var src = await PDFLib.PDFDocument.load(srcBytes, { ignoreEncryption: true });
+        // Form filling: when the editor collected values for this PDF's
+        // AcroForm fields, fill them in a scratch copy and FLATTEN it, so
+        // the filled values become part of the page content itself and
+        // survive the copyPages() rebuild below (form dictionaries do
+        // not). Any failure keeps the unfilled source — never blocks the
+        // export.
+        if (args.formValues && Object.keys(args.formValues).length) {
+            try {
+                var fdoc = await PDFLib.PDFDocument.load(srcBytes, { ignoreEncryption: true });
+                var eform = fdoc.getForm();
+                Object.keys(args.formValues).forEach(function (name) {
+                    var val = args.formValues[name];
+                    var fld = null;
+                    try { fld = eform.getField(name); } catch (e) { fld = null; }
+                    if (!fld) return;
+                    try {
+                        if (fld instanceof PDFLib.PDFTextField) fld.setText(val);
+                        else if (fld instanceof PDFLib.PDFCheckBox) { if (val === 'true') fld.check(); else fld.uncheck(); }
+                        else if (fld instanceof PDFLib.PDFRadioGroup) fld.select(val);
+                        else if (fld instanceof PDFLib.PDFDropdown) fld.select(val);
+                        else if (fld instanceof PDFLib.PDFOptionList) fld.select(val);
+                    } catch (e) { /* one bad field must not sink the rest */ }
+                });
+                var hfont = await fdoc.embedFont(PDFLib.StandardFonts.Helvetica);
+                eform.updateFieldAppearances(hfont);
+                eform.flatten();
+                src = fdoc;
+            } catch (e) { /* fall through with the unfilled source */ }
+        }
         var out = await PDFLib.PDFDocument.create();
         var font = await out.embedFont(PDFLib.StandardFonts.Helvetica);
         var fontB = await out.embedFont(PDFLib.StandardFonts.HelveticaBold);

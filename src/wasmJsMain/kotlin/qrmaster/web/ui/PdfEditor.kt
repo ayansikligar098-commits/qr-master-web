@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -177,7 +179,55 @@ private fun pdfSaveSession(b64: String, name: String) {
 }
 
 private enum class EdTool { Select, Text, Draw, Highlight, Underline, Strike, Squiggle, Rect, Ellipse, Line, Check, Cross, Arrow, Redact, Crop, Eraser }
-private enum class EdTab { Edit, Sign, Organize }
+private enum class EdTab { Edit, Sign, Organize, Form }
+
+/**
+ * One fillable AcroForm field of the open document, as reported by the
+ * shell's `formFields` op. [value] is the field's current value: the
+ * text content, "true"/"false" for a checkbox, or the selected option
+ * for a radio group / dropdown. On download the values travel in the
+ * export args and the shell fills + flattens them into the real PDF
+ * (see qmEditorExport in index.html).
+ */
+data class EdFormField(
+    val name: String,
+    val type: String, // text | checkbox | radio | dropdown | signature | button | other
+    val value: String,
+    val options: List<String> = emptyList()
+)
+
+/** Parses the `fields` array of a `formFields` op result. */
+private fun parseEdFormFields(res: JsonObject): List<EdFormField> {
+    val arr = res["fields"] as? JsonArray ?: return emptyList()
+    return arr.mapNotNull { el ->
+        val o = el as? JsonObject ?: return@mapNotNull null
+        val opts = (o["options"] as? JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: emptyList()
+        EdFormField(o.asyncStr("name"), o.asyncStr("type"), o.asyncStr("value"), opts)
+    }
+}
+
+/** Parses "1-3, 5" style page ranges into 0-based page indices. */
+private fun edParseRange(input: String, total: Int): List<Int> {
+    val out = ArrayList<Int>()
+    for (part in input.split(",")) {
+        val p = part.trim()
+        if (p.isEmpty()) continue
+        val dash = p.indexOf('-', 1)
+        if (dash > 0) {
+            val a = p.substring(0, dash).trim().toIntOrNull()
+            val b = p.substring(dash + 1).trim().toIntOrNull()
+            if (a != null && b != null) {
+                val lo = min(a, b); val hi = max(a, b)
+                for (n in lo..hi) if (n in 1..total && (n - 1) !in out) out.add(n - 1)
+            }
+        } else {
+            val n = p.toIntOrNull()
+            if (n != null && n in 1..total && (n - 1) !in out) out.add(n - 1)
+        }
+    }
+    return out
+}
 
 private val ED_COLORS = listOf(
     0xFF111827L, 0xFFFFFFFFL, 0xFFDC2626L, 0xFF2563EBL, 0xFF059669L,
@@ -264,6 +314,10 @@ fun PdfEditorScreen(state: AppState) {
     var draftPoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     var sigStrokes by remember { mutableStateOf<List<List<Pair<Float, Float>>>>(emptyList()) }
     var savedSigs by remember { mutableStateOf<List<List<List<Pair<Float, Float>>>>>(emptyList()) }
+    // Fillable form fields of the open document (Fill Form tab). Empty
+    // for PDFs without an AcroForm — the tab then stays hidden.
+    var formFields by remember { mutableStateOf<List<EdFormField>>(emptyList()) }
+    var extractRange by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
 
     val page = pages.getOrNull(current)
@@ -383,6 +437,7 @@ fun PdfEditorScreen(state: AppState) {
         val capped = min(count, 50)
         pages = (0 until capped).map { EdPageState(srcIndex = it) }
         current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
+        formFields = emptyList()
         zoom = 1f; zoomTouched = false; propsOpen = false
         previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
         // Gate on page 1 actually rendering. The pdf-lib page count above
@@ -405,6 +460,18 @@ fun PdfEditorScreen(state: AppState) {
             count > 50 -> "Opened the first 50 of $count pages (editor limit)."
             else -> "Opened $count pages."
         }
+        // Discover the document's fillable form fields (Fill Form tab).
+        // Best-effort: a PDF without an AcroForm yields an empty list
+        // and the tab simply never appears.
+        val fres = pdfCall("formFields", buildJsonObject { put("pdf", b64) }.toString(), 60_000)
+        if (fres != null && fres.asyncOk()) {
+            formFields = parseEdFormFields(fres)
+            if (formFields.isNotEmpty()) {
+                statusText = (statusText ?: "") +
+                    " This PDF has ${formFields.size} fillable form field(s) — see the Fill Form tab."
+            }
+        }
+        if (tab == EdTab.Form && formFields.isEmpty()) tab = EdTab.Edit
         for (i in 0 until capped) renderThumb(i)
         // Persist the freshly opened document (a different file replaces
         // the previous record). A restore doesn't re-save — its record
@@ -521,6 +588,18 @@ fun PdfEditorScreen(state: AppState) {
         scope.launch {
             val args = buildJsonObject {
                 put("pdf", b64)
+                // Form values collected in the Fill Form tab: the shell
+                // fills them into a scratch copy and flattens it before
+                // rebuilding the pages, so they survive as real content.
+                val formValues = buildJsonObject {
+                    formFields.forEach { f ->
+                        when (f.type) {
+                            "text", "checkbox" -> put(f.name, f.value)
+                            "radio", "dropdown" -> if (f.value.isNotBlank()) put(f.name, f.value)
+                        }
+                    }
+                }
+                if (formValues.isNotEmpty()) put("formValues", formValues)
                 if (wmText.isNotBlank()) put("watermark", buildJsonObject {
                     put("text", wmText); put("opacity", wmOpacity.toDouble()); put("color", edHex(wmColor))
                 })
@@ -563,6 +642,82 @@ fun PdfEditorScreen(state: AppState) {
             downloadFileBase64(outName, outB64, "application/pdf")
             recordHistory("PDF Editor", outName, "Edited PDF · ${pages.size} pages")
             statusText = "Downloaded $outName — open it to check your edits are in the file."
+        }
+    }
+
+    /**
+     * Organize → "Add Pages from PDF": appends every page of another
+     * PDF to the open document (the shell's appendTo op returns the
+     * combined file, which becomes the editor's new source) and adds
+     * the new pages at the end of the page list.
+     */
+    fun addPagesFlow() {
+        val srcB64 = pdfB64 ?: return
+        if (pages.size >= 50) { errorText = "This document already fills the editor's 50-page limit."; return }
+        launchPick(scope, PDF_SPEC, false, current = { emptyList() }) { incoming, err ->
+            if (err != null) { errorText = err; return@launchPick }
+            val f = incoming.firstOrNull() ?: return@launchPick
+            scope.launch {
+                val other = loadFileBase64(f.id) ?: run { errorText = "Could not read ${f.name}."; return@launch }
+                busy = true; errorText = null; statusText = "Adding pages from ${f.name}…"
+                val libErr = ensureEditorLibs()
+                if (libErr != null) { busy = false; errorText = libErr; return@launch }
+                val res = pdfCall("appendTo", buildJsonObject {
+                    put("pdf", srcB64); put("pdf2", other)
+                }.toString(), 300_000)
+                busy = false
+                if (res == null || !res.asyncOk()) {
+                    errorText = res?.asyncError() ?: "Could not add pages from that PDF."
+                    return@launch
+                }
+                val combined = res.asyncStr("b64")
+                val from = res.asyncStr("from").toIntOrNull() ?: 0
+                val added = res.asyncStr("added").toIntOrNull() ?: 0
+                if (combined.isBlank() || added <= 0) { errorText = "That PDF has no pages to add."; return@launch }
+                snapshot()
+                val oldSize = pages.size
+                val take = min(added, max(0, 50 - oldSize))
+                pdfB64 = combined
+                if (take > 0) pages = pages + (0 until take).map { EdPageState(srcIndex = from + it) }
+                pdfSaveSession(combined, fileName)
+                statusText = when {
+                    take < added -> "Added the first $take of $added pages from ${f.name} (50-page editor limit)."
+                    else -> "Added $added page(s) from ${f.name} — they are at the end of the list; reorder them here if you need to."
+                }
+                // The combined document may carry different form fields.
+                val fres = pdfCall("formFields", buildJsonObject { put("pdf", combined) }.toString(), 60_000)
+                if (fres != null && fres.asyncOk()) formFields = parseEdFormFields(fres)
+                afterStructureChange(if (take > 0) oldSize else current)
+            }
+        }
+    }
+
+    /**
+     * Organize → "Extract to New PDF": downloads a new PDF holding the
+     * chosen pages (numbers as shown in the page list) in list order.
+     */
+    fun extractFlow() {
+        val srcB64 = pdfB64 ?: return
+        val picked = edParseRange(extractRange, pages.size)
+        if (picked.isEmpty()) { errorText = "Enter the pages to extract first, like 1-3, 5."; return }
+        val srcPages = picked.mapNotNull { i ->
+            pages.getOrNull(i)?.srcIndex?.takeIf { it >= 0 }?.plus(1)
+        }
+        if (srcPages.isEmpty()) { errorText = "Those are blank pages — there is nothing to extract."; return }
+        busy = true; errorText = null
+        scope.launch {
+            val libErr = ensureEditorLibs()
+            if (libErr != null) { busy = false; errorText = libErr; return@launch }
+            val res = pdfCall("extract", buildJsonObject {
+                put("pdf", srcB64)
+                put("pages", buildJsonArray { srcPages.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } })
+            }.toString(), 300_000)
+            busy = false
+            if (res == null || !res.asyncOk()) { errorText = res?.asyncError() ?: "Extract failed."; return@launch }
+            val outName = fileName.substringBeforeLast(".").ifBlank { "document" } + "-extract.pdf"
+            downloadFileBase64(outName, res.asyncStr("b64"), "application/pdf")
+            recordHistory("PDF Editor", outName, "Extracted ${srcPages.size} page(s)")
+            statusText = "Downloaded $outName with ${res.asyncStr("pages")} page(s)."
         }
     }
 
@@ -1214,6 +1369,7 @@ fun PdfEditorScreen(state: AppState) {
                 OutlinedButton(onClick = {
                     files = emptyList(); pages = emptyList(); pdfB64 = null
                     previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); selectedId = null
+                    formFields = emptyList(); extractRange = ""
                     savedSession = null
                     idbClear(PDF_IDB_NAME)
                 }) { Text("Open PDF", fontSize = 13.sp) }
@@ -1286,9 +1442,16 @@ fun PdfEditorScreen(state: AppState) {
                         Text("${pages.size} pages", fontSize = 12.sp, color = MutedText)
                     }
                     Spacer(Modifier.height(8.dp))
-                    // tabs
+                    // tabs (Fill Form appears only when the open PDF
+                    // actually has fillable form fields)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(EdTab.Edit to "Edit & Annotate", EdTab.Sign to "Fill & Sign", EdTab.Organize to "Organize Pages").forEach { (t, label) ->
+                        val tabList = listOf(
+                            EdTab.Edit to "Edit & Annotate",
+                            EdTab.Sign to "Fill & Sign",
+                            EdTab.Organize to "Organize Pages"
+                        ) + if (formFields.isNotEmpty())
+                            listOf(EdTab.Form to "Fill Form (${formFields.size})") else emptyList()
+                        tabList.forEach { (t, label) ->
                             FilterChip(selected = tab == t, onClick = { tab = t },
                                 label = { Text(label, fontSize = 12.5.sp) },
                                 shape = RoundedCornerShape(10.dp),
@@ -1492,9 +1655,79 @@ fun PdfEditorScreen(state: AppState) {
                                     pages = pages.filterIndexed { i, _ -> i != current }
                                     afterStructureChange(min(current, pages.size - 1))
                                 }
+                                EdToolBtn("Add Pages from PDF", false) { addPagesFlow() }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(top = 8.dp)) {
+                                OutlinedTextField(
+                                    value = extractRange,
+                                    onValueChange = { extractRange = it },
+                                    label = { Text("Pages to extract, e.g. 1-3, 5") },
+                                    singleLine = true, shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.width(230.dp)
+                                )
+                                EdToolBtn("Extract to New PDF", false) { extractFlow() }
                             }
                             Text("Reorder with the ↑ ↓ buttons under each thumbnail, or select a page and use Move Earlier / Move Later. Page order applies on download.",
                                 fontSize = 12.sp, color = MutedText, modifier = Modifier.padding(top = 6.dp))
+                        }
+                        EdTab.Form -> {
+                            Column(
+                                Modifier.fillMaxWidth().heightIn(max = 330.dp)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text("Fill this PDF's form fields below. The values are written into the file and flattened when you tap Download PDF, so they print and display everywhere.",
+                                    fontSize = 12.sp, color = MutedText)
+                                formFields.forEach { f ->
+                                    when (f.type) {
+                                        "text" -> OutlinedTextField(
+                                            value = f.value,
+                                            onValueChange = { v ->
+                                                formFields = formFields.map { if (it.name == f.name) it.copy(value = v) else it }
+                                            },
+                                            label = { Text(f.name) }, singleLine = true,
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        "checkbox" -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(
+                                                checked = f.value == "true",
+                                                onCheckedChange = { c ->
+                                                    formFields = formFields.map {
+                                                        if (it.name == f.name) it.copy(value = if (c) "true" else "false") else it
+                                                    }
+                                                }
+                                            )
+                                            Text(f.name, fontSize = 13.sp, color = NavyText)
+                                        }
+                                        "radio", "dropdown" -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text(f.name, fontSize = 12.5.sp, color = MutedText, fontWeight = FontWeight.Medium)
+                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                                f.options.forEach { opt ->
+                                                    FilterChip(
+                                                        selected = f.value == opt,
+                                                        onClick = {
+                                                            formFields = formFields.map {
+                                                                if (it.name == f.name) it.copy(value = opt) else it
+                                                            }
+                                                        },
+                                                        label = { Text(opt, fontSize = 12.sp) },
+                                                        shape = RoundedCornerShape(16.dp),
+                                                        colors = FilterChipDefaults.filterChipColors(
+                                                            selectedContainerColor = PurplePrimary,
+                                                            selectedLabelColor = Color.White)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        else -> Text("${f.name} — this field type can't be filled here.",
+                                            fontSize = 12.sp, color = MutedText)
+                                    }
+                                }
+                            }
                         }
                     }
                 Spacer(Modifier.height(10.dp))
