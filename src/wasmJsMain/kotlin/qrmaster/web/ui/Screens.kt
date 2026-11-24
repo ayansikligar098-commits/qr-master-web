@@ -1550,7 +1550,7 @@ fun SpinScreen(state: AppState) {
                                 )
                                 if (snap.extraGranted > 0) {
                                     Text(
-                                        "Notification bonus spins (${snap.extraGranted}) are spent in the Android app — they follow your phone's notification setting.",
+                                        "Bonus spins (${snap.extraGranted}) are spent in the Android app.",
                                         fontSize = 11.5.sp, color = MutedText,
                                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 11.dp)
                                     )
@@ -2636,8 +2636,7 @@ fun SettingsScreen(state: AppState) {
                                     colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary)
                                 ) { Text("Open Notifications", fontSize = 12.5.sp) }
                                 Text(
-                                    "Free-spin reward: turning notifications ON in the Kitnook Android app gives +3 free spins (once per account). " +
-                                        "Used so far: ${profile?.notifSpinsUsed ?: 0}. That reward follows your phone's notification setting, so it is managed in the app — spins work on both.",
+                                    "Your spins and rewards are shared between this website and the Kitnook Android app — it is one account, and spins work on both.",
                                     fontSize = 12.sp, color = MutedText
                                 )
                             }

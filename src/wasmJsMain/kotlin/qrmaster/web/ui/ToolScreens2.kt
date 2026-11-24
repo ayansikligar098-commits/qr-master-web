@@ -711,7 +711,7 @@ fun NotificationsScreen(state: AppState) {
         }
         item {
             Text(
-                "Tip: the +3 free-spin notification reward is managed in the Kitnook Android app (it follows the phone's notification setting). Spins you earn there work here too — it is one account.",
+                "Tip: spins and rewards are shared between this website and the Kitnook Android app — it is one account.",
                 fontSize = 12.sp, color = MutedText
             )
         }
