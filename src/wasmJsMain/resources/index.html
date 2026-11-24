@@ -709,14 +709,20 @@
     // Render text to a transparent PNG (browser only; returns null headless).
     // Used for watermarks and for text placed on rotated pages, where pdf-lib
     // cannot rotate native text. Returns { dataUrl, w, h } in points.
-    function qmTextPng(text, size, hex, bold, rotateDeg, alpha) {
+    function qmTextPng(text, size, hex, bold, rotateDeg, alpha, fontFamily, align) {
         try {
             if (typeof document === 'undefined') return null;
             var S = 3;
             var lines = ('' + text).split('\n');
             var cv = document.createElement('canvas');
             var ctx = cv.getContext('2d');
-            var fontSpec = (bold ? '700 ' : '400 ') + (size * S) + 'px Arial, Helvetica, sans-serif';
+            var stacks = {
+                serif: 'Georgia, "Times New Roman", Times, serif',
+                mono: '"Courier New", Courier, monospace',
+                script: '"Segoe Script", "Brush Script MT", "Lucida Handwriting", "Apple Chancery", cursive'
+            };
+            var stack = stacks[fontFamily] || 'Arial, Helvetica, sans-serif';
+            var fontSpec = (fontFamily === 'script' ? 'italic ' : (bold ? '700 ' : '400 ')) + (size * S) + 'px ' + stack;
             ctx.font = fontSpec;
             var tw = 0;
             for (var i = 0; i < lines.length; i++) tw = Math.max(tw, ctx.measureText(lines[i]).width);
@@ -729,13 +735,77 @@
             ctx.font = fontSpec;
             ctx.fillStyle = hex || '#000000';
             ctx.globalAlpha = (alpha == null ? 1 : alpha);
-            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            var al = (align === 'left' || align === 'right') ? align : 'center';
+            ctx.textAlign = al; ctx.textBaseline = 'middle';
             ctx.translate(cv.width / 2, cv.height / 2);
             ctx.rotate((rotateDeg || 0) * Math.PI / 180);
+            var ax = al === 'left' ? -tw / 2 : (al === 'right' ? tw / 2 : 0);
             for (var j = 0; j < lines.length; j++) {
-                ctx.fillText(lines[j], 0, (j - (lines.length - 1) / 2) * size * S * 1.22);
+                ctx.fillText(lines[j], ax, (j - (lines.length - 1) / 2) * size * S * 1.22);
             }
             return { dataUrl: cv.toDataURL('image/png'), w: cv.width / S, h: cv.height / S };
+        } catch (e) { return null; }
+    }
+    // Renders a placed IMAGE rotated by deg degrees (clockwise, as on
+    // screen) into a transparent PNG of the rotated bounding box, in
+    // points. Returns null when the image cannot be loaded — the caller
+    // then falls back to placing it unrotated.
+    function qmRotatedImagePng(dataUrl, w, h, deg) {
+        return new Promise(function (resolve) {
+            try {
+                var img = new Image();
+                img.onload = function () {
+                    try {
+                        var rad = Math.abs(deg || 0) * Math.PI / 180;
+                        var bw = w * Math.abs(Math.cos(rad)) + h * Math.abs(Math.sin(rad));
+                        var bh = w * Math.abs(Math.sin(rad)) + h * Math.abs(Math.cos(rad));
+                        var s = Math.min(3, Math.max(1, (img.naturalWidth || w) / Math.max(1, w)));
+                        var cv = document.createElement('canvas');
+                        cv.width = Math.max(2, Math.round(bw * s)); cv.height = Math.max(2, Math.round(bh * s));
+                        var ctx = cv.getContext('2d');
+                        ctx.translate(cv.width / 2, cv.height / 2);
+                        ctx.rotate((deg || 0) * Math.PI / 180);
+                        ctx.drawImage(img, -w * s / 2, -h * s / 2, w * s, h * s);
+                        resolve({ dataUrl: cv.toDataURL('image/png'), w: bw, h: bh });
+                    } catch (e) { resolve(null); }
+                };
+                img.onerror = function () { resolve(null); };
+                img.src = dataUrl;
+            } catch (e) { resolve(null); }
+        });
+    }
+    // Renders a rotated SHAPE object (rect / ellipse / highlight / redact)
+    // into a transparent PNG of its rotated bounding box, in points —
+    // pdf-lib's vector calls cannot rotate around the object's centre.
+    // Opacity is baked in; the caller places the PNG at opacity 1.
+    function qmShapePng(o) {
+        try {
+            if (typeof document === 'undefined') return null;
+            var S = 3;
+            var rad = Math.abs(o.rot || 0) * Math.PI / 180;
+            var bw = o.w * Math.abs(Math.cos(rad)) + o.h * Math.abs(Math.sin(rad));
+            var bh = o.w * Math.abs(Math.sin(rad)) + o.h * Math.abs(Math.cos(rad));
+            var cv = document.createElement('canvas');
+            cv.width = Math.max(2, Math.ceil(bw * S)); cv.height = Math.max(2, Math.ceil(bh * S));
+            var ctx = cv.getContext('2d');
+            ctx.globalAlpha = (o.opacity == null ? 1 : o.opacity);
+            ctx.translate(cv.width / 2, cv.height / 2);
+            ctx.rotate((o.rot || 0) * Math.PI / 180);
+            ctx.scale(S, S);
+            var col = o.color || '#000000';
+            if (o.t === 'redact') {
+                ctx.fillStyle = '#000000'; ctx.fillRect(-o.w / 2, -o.h / 2, o.w, o.h);
+            } else if (o.t === 'highlight' || (o.t === 'rect' && o.fill)) {
+                ctx.fillStyle = col; ctx.fillRect(-o.w / 2, -o.h / 2, o.w, o.h);
+            } else if (o.t === 'rect') {
+                ctx.strokeStyle = col; ctx.lineWidth = o.border || 1.5;
+                ctx.strokeRect(-o.w / 2, -o.h / 2, o.w, o.h);
+            } else if (o.t === 'ellipse') {
+                ctx.beginPath(); ctx.ellipse(0, 0, o.w / 2, o.h / 2, 0, 0, Math.PI * 2);
+                if (o.fill) { ctx.fillStyle = col; ctx.fill(); }
+                else { ctx.strokeStyle = col; ctx.lineWidth = o.border || 1.5; ctx.stroke(); }
+            } else return null;
+            return { dataUrl: cv.toDataURL('image/png'), w: bw, h: bh };
         } catch (e) { return null; }
     }
     // pdf-lib's standard fonts use WinAnsi encoding: ASCII + Latin-1 + a small
@@ -830,6 +900,10 @@
         var out = await PDFLib.PDFDocument.create();
         var font = await out.embedFont(PDFLib.StandardFonts.Helvetica);
         var fontB = await out.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        var fontT = await out.embedFont(PDFLib.StandardFonts.TimesRoman);
+        var fontTB = await out.embedFont(PDFLib.StandardFonts.TimesRomanBold);
+        var fontC = await out.embedFont(PDFLib.StandardFonts.Courier);
+        var fontCB = await out.embedFont(PDFLib.StandardFonts.CourierBold);
         for (var pi = 0; pi < args.pages.length; pi++) {
             var spec = args.pages[pi];
             var page;
@@ -867,7 +941,19 @@
                 var o = objs[oi];
                 var col = qmHexRgb(o.color);
                 var op = o.opacity == null ? 1 : o.opacity;
-                if (o.t === 'rect' || o.t === 'highlight' || o.t === 'redact') {
+                // Rotated shapes are rasterised (rotated around their
+                // centre, exactly as previewed) — pdf-lib's vector calls
+                // cannot do that rotation.
+                var handledByPng = false;
+                if (o.rot && (o.t === 'rect' || o.t === 'highlight' || o.t === 'redact' || o.t === 'ellipse')) {
+                    var shp = qmShapePng(o);
+                    if (shp) {
+                        var shImg = await out.embedPng(shp.dataUrl);
+                        placed(shImg, { x: o.x + o.w / 2 - shp.w / 2, y: o.y + o.h / 2 - shp.h / 2, w: shp.w, h: shp.h, opacity: 1 });
+                        handledByPng = true;
+                    }
+                }
+                if (!handledByPng && (o.t === 'rect' || o.t === 'highlight' || o.t === 'redact')) {
                     var rr = RX(o.x, o.y, o.w, o.h);
                     var opts = { x: rr.x, y: rr.y, width: rr.w, height: rr.h, opacity: op };
                     if (o.t === 'redact') { opts.color = PDFLib.rgb(0, 0, 0); opts.opacity = 1; }
@@ -875,7 +961,7 @@
                     else if (o.fill) opts.color = col;
                     else { opts.borderColor = col; opts.borderWidth = o.border || 1.5; }
                     page.drawRectangle(opts);
-                } else if (o.t === 'ellipse') {
+                } else if (!handledByPng && o.t === 'ellipse') {
                     var c = PX(o.x + o.w / 2, o.y + o.h / 2);
                     var eo = { x: c[0], y: c[1], xScale: ((R === 90 || R === 270) ? o.h : o.w) / 2, yScale: ((R === 90 || R === 270) ? o.w : o.h) / 2, opacity: op };
                     if (o.fill) eo.color = col; else { eo.borderColor = col; eo.borderWidth = o.border || 1.5; }
@@ -885,26 +971,65 @@
                     page.drawLine({ start: { x: la[0], y: la[1] }, end: { x: lb[0], y: lb[1] }, thickness: o.border || 1.5, color: col, opacity: op });
                 } else if (o.t === 'path') {
                     var pts = o.points || [];
+                    var prot = o.rot || 0;
+                    var pcx = o.x + o.w / 2, pcy = o.y + o.h / 2;
+                    var prad = prot * Math.PI / 180, pcos = Math.cos(prad), psin = Math.sin(prad);
+                    function PTP(pt) {
+                        var ax = o.x + pt[0] * o.w, ay = o.y + pt[1] * o.h;
+                        if (prot) {
+                            var dx = ax - pcx, dy = ay - pcy;
+                            ax = pcx + dx * pcos - dy * psin;
+                            ay = pcy + dx * psin + dy * pcos;
+                        }
+                        return PX(ax, ay);
+                    }
                     for (var si = 0; si + 1 < pts.length; si++) {
-                        var p1 = PX(o.x + pts[si][0] * o.w, o.y + pts[si][1] * o.h);
-                        var p2 = PX(o.x + pts[si + 1][0] * o.w, o.y + pts[si + 1][1] * o.h);
+                        var pa = pts[si], pb = pts[si + 1];
+                        // (-1,-1) is the pen-up separator between strokes
+                        // (signatures, cross, arrow): the preview skips
+                        // those segments, and so must the export — drawing
+                        // them produced stray diagonal lines across the page.
+                        if (!pa || !pb || pa[0] < 0 || pa[1] < 0 || pb[0] < 0 || pb[1] < 0) continue;
+                        var p1 = PTP(pa), p2 = PTP(pb);
                         page.drawLine({ start: { x: p1[0], y: p1[1] }, end: { x: p2[0], y: p2[1] }, thickness: o.border || 2, color: col, opacity: op });
                     }
                 } else if (o.t === 'image') {
-                    var im = ('' + o.dataUrl).indexOf('image/png') >= 0 ? await out.embedPng(o.dataUrl) : await out.embedJpg(o.dataUrl);
-                    placed(im, o);
+                    if (o.rot) {
+                        var rp = await qmRotatedImagePng(o.dataUrl, o.w, o.h, o.rot);
+                        if (rp) {
+                            var rimg = await out.embedPng(rp.dataUrl);
+                            placed(rimg, { x: o.x + o.w / 2 - rp.w / 2, y: o.y + o.h / 2 - rp.h / 2, w: rp.w, h: rp.h, opacity: op });
+                        } else {
+                            var imf = ('' + o.dataUrl).indexOf('image/png') >= 0 ? await out.embedPng(o.dataUrl) : await out.embedJpg(o.dataUrl);
+                            placed(imf, o);
+                        }
+                    } else {
+                        var im = ('' + o.dataUrl).indexOf('image/png') >= 0 ? await out.embedPng(o.dataUrl) : await out.embedJpg(o.dataUrl);
+                        placed(im, o);
+                    }
                 } else if (o.t === 'text') {
                     var txt = '' + (o.text || '');
-                    if (R === 0 && qmWinAnsiSafe(txt)) {
-                        var fnt = o.bold ? fontB : font;
+                    var trot = o.rot || 0;
+                    if (R === 0 && !trot && o.font !== 'script' && qmWinAnsiSafe(txt)) {
+                        var fnt = o.font === 'serif' ? (o.bold ? fontTB : fontT)
+                            : o.font === 'mono' ? (o.bold ? fontCB : fontC)
+                            : (o.bold ? fontB : font);
                         var lines = txt.split('\n');
                         for (var li = 0; li < lines.length; li++) {
                             var base = H - (o.y + o.size * 0.82) - li * o.size * 1.22;
-                            page.drawText(lines[li], { x: OX + o.x, y: OY + base, size: o.size, font: fnt, color: col, opacity: op });
+                            var lw = fnt.widthOfTextAtSize(lines[li], o.size);
+                            var lx = OX + o.x;
+                            if (o.align === 'center') lx += Math.max(0, (o.w - lw) / 2);
+                            else if (o.align === 'right') lx += Math.max(0, o.w - lw);
+                            page.drawText(lines[li], { x: lx, y: OY + base, size: o.size, font: fnt, color: col, opacity: op });
                         }
                     } else {
-                        var tp = qmTextPng(txt, o.size, o.color, o.bold, 0, op);
-                        if (tp) { var timg = await out.embedPng(tp.dataUrl); placed(timg, { x: o.x, y: o.y, w: tp.w, h: tp.h, opacity: 1 }); }
+                        var tp = qmTextPng(txt, o.size, o.color, o.bold, trot, op, o.font, o.align);
+                        if (tp) {
+                            var timg = await out.embedPng(tp.dataUrl);
+                            if (trot) placed(timg, { x: o.x + o.w / 2 - tp.w / 2, y: o.y + o.h / 2 - tp.h / 2, w: tp.w, h: tp.h, opacity: 1 });
+                            else placed(timg, { x: o.x, y: o.y, w: tp.w, h: tp.h, opacity: 1 });
+                        }
                     }
                 }
             }

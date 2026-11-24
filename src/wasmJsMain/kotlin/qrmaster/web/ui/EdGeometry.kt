@@ -1,8 +1,13 @@
 package qrmaster.web.ui
 
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * Pure editor geometry (no Compose / browser dependencies) so the resize
@@ -161,3 +166,116 @@ fun edFitNewImage(iw: Int, ih: Int, pageW: Float, pageH: Float): Pair<Float, Flo
     if (h > maxH) { h = maxH; w = h * iw.toFloat() / ih.toFloat() }
     return w to h
 }
+
+// ── Rotation / text-markup / preset-shape helpers (Smallpdf parity) ────────
+// All coordinates here are DISPLAYED page points (origin top-left, y down),
+// so a positive angle turns CLOCKWISE on screen — matching Compose's
+// graphicsLayer rotationZ, the browser canvas rotate(), and the shell
+// export's canvas helpers.
+
+/** Rotates point (px, py) around centre (cx, cy) by [deg] degrees. */
+fun edRotatePoint(cx: Float, cy: Float, px: Float, py: Float, deg: Float): Pair<Float, Float> {
+    if (deg == 0f) return px to py
+    val rad = deg * (PI / 180.0)
+    val c = cos(rad).toFloat(); val s = sin(rad).toFloat()
+    val dx = px - cx; val dy = py - cy
+    return (cx + dx * c - dy * s) to (cy + dx * s + dy * c)
+}
+
+/**
+ * Hit test for a possibly-rotated object: the pointer is rotated back into
+ * the object's unrotated frame and tested against its box. With rotation 0
+ * this is exactly the plain box test the editor always used.
+ */
+fun edHitTest(x: Float, y: Float, w: Float, h: Float, rotation: Float, px: Float, py: Float): Boolean {
+    val (lx, ly) = edRotatePoint(x + w / 2f, y + h / 2f, px, py, -rotation)
+    return lx >= x && lx <= x + w && ly >= y && ly <= y + h
+}
+
+/** Pointer angle around a centre: degrees 0..360, 0 = east, growing clockwise (y-down space). */
+fun edAngleDeg(cx: Float, cy: Float, px: Float, py: Float): Float {
+    var a = (atan2((py - cy).toDouble(), (px - cx).toDouble()) * 180.0 / PI).toFloat() % 360f
+    if (a < 0f) a += 360f
+    return a
+}
+
+/** Snaps [deg] to the nearest multiple of [step] when within [tol] degrees of it. */
+fun edSnapAngle(deg: Float, step: Float = 15f, tol: Float = 4f): Float {
+    var a = deg % 360f; if (a < 0f) a += 360f
+    val snapped = ((a / step).roundToInt() * step) % 360f
+    var diff = abs(snapped - a); if (diff > 180f) diff = 360f - diff
+    return if (diff <= tol) snapped else a
+}
+
+/** Axis-aligned size of a w×h box after rotating it by [deg] degrees. */
+fun edRotatedBounds(w: Float, h: Float, deg: Float): Pair<Float, Float> {
+    val rad = deg * (PI / 180.0)
+    val c = abs(cos(rad)).toFloat(); val s = abs(sin(rad)).toFloat()
+    return (w * c + h * s) to (w * s + h * c)
+}
+
+/**
+ * All selection-handle anchor points of an object, in page points:
+ * indices 0..7 are the resize handles (same order as edHandles), rotated
+ * with the object; index 8 is the ROTATE handle, floating [rotateGap]
+ * points above the top-centre edge (also rotated with the object).
+ */
+fun edHandlesRotated(
+    x: Float, y: Float, w: Float, h: Float, rotation: Float, rotateGap: Float = 30f
+): List<Pair<Float, Float>> {
+    val base = listOf(
+        x to y, (x + w) to y, x to (y + h), (x + w) to (y + h),
+        (x + w / 2) to y, (x + w) to (y + h / 2),
+        (x + w / 2) to (y + h), x to (y + h / 2),
+        (x + w / 2) to (y - rotateGap)
+    )
+    if (rotation == 0f) return base
+    val cx = x + w / 2f; val cy = y + h / 2f
+    return base.map { (px, py) -> edRotatePoint(cx, cy, px, py, rotation) }
+}
+
+/**
+ * Box for a text-markup stroke (underline / strikethrough / squiggle)
+ * created by dragging across a line of text: the drag's horizontal extent
+ * is kept; underline and squiggle sit at the drag's BOTTOM edge,
+ * strikethrough through its middle. [kind]: "underline" | "strike" | "squiggle".
+ */
+fun edMarkupBox(kind: String, x0: Float, y0: Float, x1: Float, y1: Float): EdBox {
+    val x = min(x0, x1); val w = max(10f, abs(x1 - x0))
+    val top = min(y0, y1); val bottom = max(y0, y1); val mid = (top + bottom) / 2f
+    return when (kind) {
+        "strike" -> EdBox(x, mid - 4f, w, 8f)
+        "squiggle" -> EdBox(x, bottom - 5f, w, 10f)
+        else -> EdBox(x, bottom - 4f, w, 8f) // underline
+    }
+}
+
+/**
+ * Relative points (0..1 in the box) of a squiggly underline: a smooth sine
+ * wave, [cycles] full waves across the box, sampled finely enough to look
+ * hand-drawn when stroked segment by segment.
+ */
+fun edSquigglePoints(cycles: Float = 3f, steps: Int = 36): List<Pair<Float, Float>> {
+    if (steps < 2) return listOf(0f to 0.5f, 1f to 0.5f)
+    return (0..steps).map { i ->
+        val fx = i.toFloat() / steps
+        val fy = (0.5 + 0.30 * sin(fx * cycles * 2.0 * PI)).toFloat()
+        fx to fy
+    }
+}
+
+/** Checkmark polyline (relative 0..1 in its box). */
+fun edCheckPoints(): List<Pair<Float, Float>> =
+    listOf(0.08f to 0.58f, 0.36f to 0.88f, 0.94f to 0.12f)
+
+/** Cross (✕): two strokes joined by the (-1,-1) pen-up separator. */
+fun edCrossPoints(): List<Pair<Float, Float>> = listOf(
+    0.12f to 0.12f, 0.88f to 0.88f, -1f to -1f, 0.88f to 0.12f, 0.12f to 0.88f
+)
+
+/** Arrow along the box diagonal (same direction as the Line tool) with a two-stroke head. */
+fun edArrowPoints(): List<Pair<Float, Float>> = listOf(
+    0.06f to 0.06f, 0.94f to 0.94f, -1f to -1f,
+    0.94f to 0.94f, 0.66f to 0.90f, -1f to -1f,
+    0.94f to 0.94f, 0.90f to 0.66f
+)

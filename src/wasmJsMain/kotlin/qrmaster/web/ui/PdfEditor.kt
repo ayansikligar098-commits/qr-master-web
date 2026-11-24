@@ -67,6 +67,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -117,7 +118,10 @@ data class EdObj(
     val dataUrl: String? = null,
     val points: List<Pair<Float, Float>> = emptyList(), // relative 0..1 in box; (-1,-1) = pen up
     val strokeWidth: Float = 2f,
-    val fill: Boolean = false
+    val fill: Boolean = false,
+    val rotation: Float = 0f, // degrees, clockwise on screen (Smallpdf-style rotate handle)
+    val fontFamily: String = "sans", // text only: sans | serif | mono | script
+    val align: String = "left" // text only: left | center | right
 )
 
 data class EdPageState(
@@ -164,7 +168,7 @@ private fun pdfSaveSession(b64: String, name: String) {
     idbSave(PDF_IDB_NAME, pdfSessionJson(b64, name))
 }
 
-private enum class EdTool { Select, Text, Draw, Highlight, Rect, Ellipse, Line, Redact, Crop }
+private enum class EdTool { Select, Text, Draw, Highlight, Underline, Strike, Squiggle, Rect, Ellipse, Line, Check, Cross, Arrow, Redact, Crop, Eraser }
 private enum class EdTab { Edit, Sign, Organize }
 
 private val ED_COLORS = listOf(
@@ -232,6 +236,7 @@ fun PdfEditorScreen(state: AppState) {
     var redoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
     var wmText by remember { mutableStateOf("") }
     var wmOpacity by remember { mutableStateOf(0.16f) }
+    var wmColor by remember { mutableStateOf(0xFF7C3AEDL) }
     var wmPanel by remember { mutableStateOf(false) }
     var draftRect by remember { mutableStateOf<List<Float>?>(null) } // x,y,w,h displayed pts
     var draftPoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
@@ -259,6 +264,14 @@ fun PdfEditorScreen(state: AppState) {
         snapshot()
         replacePage(current, p.copy(objects = p.objects.filter { it.id != id }))
         selectedId = null
+    }
+    fun duplicateSelected() {
+        val p = pages.getOrNull(current) ?: return
+        val sel = p.objects.firstOrNull { it.id == selectedId } ?: return
+        val copy = sel.copy(id = nextId++, x = sel.x + 14f, y = sel.y + 14f)
+        snapshot()
+        replacePage(current, p.copy(objects = p.objects + copy))
+        selectedId = copy.id
     }
     fun undo() {
         if (undoStack.isEmpty()) return
@@ -474,7 +487,7 @@ fun PdfEditorScreen(state: AppState) {
             val args = buildJsonObject {
                 put("pdf", b64)
                 if (wmText.isNotBlank()) put("watermark", buildJsonObject {
-                    put("text", wmText); put("opacity", wmOpacity.toDouble()); put("color", "#7C3AED")
+                    put("text", wmText); put("opacity", wmOpacity.toDouble()); put("color", edHex(wmColor))
                 })
                 put("pages", buildJsonArray {
                     pages.forEach { p ->
@@ -490,6 +503,7 @@ fun PdfEditorScreen(state: AppState) {
                                         put("w", o.w.toDouble()); put("h", o.h.toDouble())
                                         put("color", edHex(o.color)); put("opacity", o.opacity.toDouble())
                                         put("border", o.strokeWidth.toDouble()); put("fill", o.fill)
+                                        put("rot", o.rotation.toDouble()); put("font", o.fontFamily); put("align", o.align)
                                         if (o.type == "text") { put("text", o.text); put("size", o.fontSize.toDouble()); put("bold", o.bold) }
                                         if (o.type == "image" && o.dataUrl != null) put("dataUrl", o.dataUrl)
                                         if (o.type == "path") put("points", buildJsonArray {
@@ -604,6 +618,31 @@ fun PdfEditorScreen(state: AppState) {
                                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White))
                         }
                     }
+                    item {
+                        Text("Font", fontSize = 12.sp, color = MutedText)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            listOf("sans" to "Sans", "serif" to "Serif", "mono" to "Mono", "script" to "Script").forEach { (v, label) ->
+                                FilterChip(selected = sel.fontFamily == v, onClick = { mutateSelected { it.copy(fontFamily = v) } },
+                                    label = { Text(label, fontSize = 11.5.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White))
+                            }
+                        }
+                    }
+                    item {
+                        Text("Alignment", fontSize = 12.sp, color = MutedText)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            listOf("left" to "Left", "center" to "Centre", "right" to "Right").forEach { (v, label) ->
+                                FilterChip(selected = sel.align == v, onClick = { mutateSelected { it.copy(align = v) } },
+                                    label = { Text(label, fontSize = 11.5.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White))
+                            }
+                        }
+                    }
+                    item {
+                        Text("Opacity: ${(sel.opacity * 100).toInt()}%", fontSize = 12.sp, color = MutedText)
+                        Slider(value = sel.opacity, onValueChange = { v -> mutateSelected { it.copy(opacity = v) } },
+                            valueRange = 0.05f..1f)
+                    }
                 }
                 if (sel.type == "image" || sel.type == "rect" || sel.type == "ellipse" ||
                     sel.type == "highlight" || sel.type == "redact" || sel.type == "path") {
@@ -699,6 +738,26 @@ fun PdfEditorScreen(state: AppState) {
                     }
                 }
                 item {
+                    Text("Rotation: ${sel.rotation.toInt()}°", fontSize = 12.sp, color = MutedText)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 4.dp)) {
+                        OutlinedButton(onClick = { mutateSelected { it.copy(rotation = (it.rotation - 15f + 360f) % 360f) } }) {
+                            Text("⟲ 15°", fontSize = 12.sp)
+                        }
+                        OutlinedButton(onClick = { mutateSelected { it.copy(rotation = (it.rotation + 15f) % 360f) } }) {
+                            Text("⟳ 15°", fontSize = 12.sp)
+                        }
+                        if (sel.rotation != 0f) {
+                            TextButton(onClick = { mutateSelected { it.copy(rotation = 0f) } }) { Text("Reset", fontSize = 12.sp) }
+                        }
+                    }
+                }
+                item {
+                    OutlinedButton(onClick = { duplicateSelected() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Duplicate Object", fontSize = 13.sp)
+                    }
+                }
+                item {
                     Button(onClick = { deleteSelected() },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
                         shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -722,6 +781,25 @@ fun PdfEditorScreen(state: AppState) {
                     TextButton(onClick = { snapshot(); page?.let { replacePage(current, it.copy(crop = null)) } }) {
                         Text("Clear Crop", fontSize = 12.5.sp)
                     }
+                    TextButton(onClick = {
+                        val c = page?.crop
+                        if (c != null) {
+                            snapshot()
+                            var applied = 0
+                            pages = pages.mapIndexed { i, p ->
+                                val d = dims[i]
+                                if (d != null && d.first == pageDims.first && d.second == pageDims.second) {
+                                    applied++; p.copy(crop = c)
+                                } else p
+                            }
+                            statusText = "Crop applied to $applied page(s) of the same size."
+                        }
+                    }) { Text("Apply Crop to All Pages (same size)", fontSize = 12.5.sp) }
+                    TextButton(onClick = {
+                        snapshot()
+                        pages = pages.map { it.copy(crop = null) }
+                        statusText = "Crop cleared on all pages."
+                    }) { Text("Clear Crop on All Pages", fontSize = 12.5.sp) }
                 }
                 TextButton(onClick = {
                     if (pages.size > 1) {
@@ -744,6 +822,16 @@ fun PdfEditorScreen(state: AppState) {
                 if (wmText.isNotBlank()) {
                     Text("Opacity: ${(wmOpacity * 100).toInt()}%", fontSize = 12.sp, color = MutedText)
                     Slider(value = wmOpacity, onValueChange = { wmOpacity = it }, valueRange = 0.05f..0.5f)
+                    Text("Colour", fontSize = 12.sp, color = MutedText)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        ED_COLORS.forEach { c ->
+                            Box(Modifier.size(24.dp).clip(RoundedCornerShape(7.dp))
+                                .background(Color(c))
+                                .border(if (wmColor == c) 2.dp else 0.5.dp,
+                                    if (wmColor == c) PurplePrimary else Color(0xFFCBD5E1), RoundedCornerShape(7.dp))
+                                .clickable { wmColor = c })
+                        }
+                    }
                 }
             }
             item {
@@ -791,21 +879,48 @@ fun PdfEditorScreen(state: AppState) {
                             // edge-handle drags uncommitted (the object
                             // snapped back on release).
                             var dragStartObj: EdObj? = null
+                            // Rotate-drag session anchors (handle index 8).
+                            var startAngle = 0f
+                            var startRotation = 0f
                             val liveSel = livePage?.objects?.firstOrNull { it.id == selectedId }
-                            if (tool == EdTool.Select && liveSel != null && liveSel.type != "text") {
+                            if (tool == EdTool.Select && liveSel != null) {
                                 // Nearest handle within a zoom-aware tolerance
                                 // (the old scan used a fixed ±11 pt box and let
-                                // the LAST match win).
+                                // the LAST match win). Handles rotate with the
+                                // object; text objects expose only the rotate
+                                // handle (they have no resize handles).
                                 val tol = (14f / zoom).coerceIn(11f, 40f)
-                                handle = edPickHandle(edHandles(liveSel), sx, sy, tol)
+                                val allHandles = edHandlesRotated(liveSel.x, liveSel.y, liveSel.w, liveSel.h,
+                                    liveSel.rotation, 30f / zoom)
+                                handle = if (liveSel.type == "text") {
+                                    val rp = allHandles[8]
+                                    if (max(abs(sx - rp.first), abs(sy - rp.second)) <= tol) 8 else -1
+                                } else edPickHandle(allHandles, sx, sy, tol)
+                                if (handle == 8) {
+                                    startAngle = edAngleDeg(liveSel.x + liveSel.w / 2f, liveSel.y + liveSel.h / 2f, sx, sy)
+                                    startRotation = liveSel.rotation
+                                }
+                            }
+                            // Eraser: removes drawn strokes and highlights it
+                            // touches — one undo snapshot per gesture.
+                            var eraseSnap = false
+                            fun eraseNow(px: Float, py: Float) {
+                                val p = pages.getOrNull(current) ?: return
+                                val hit = p.objects.lastOrNull {
+                                    (it.type == "path" || it.type == "highlight") &&
+                                        edHitTest(it.x, it.y, it.w, it.h, it.rotation, px, py)
+                                } ?: return
+                                if (!eraseSnap) { snapshot(); eraseSnap = true }
+                                replacePage(current, p.copy(objects = p.objects.filter { o -> o.id != hit.id }))
+                                if (selectedId == hit.id) selectedId = null
                             }
                             if (handle >= 0 && liveSel != null) {
-                                mode = "resize"; dragId = liveSel.id; dragStartObj = liveSel
+                                mode = if (handle == 8) "rotate" else "resize"; dragId = liveSel.id; dragStartObj = liveSel
                             }
                             else when (tool) {
                                 EdTool.Select -> {
                                     val hit = livePage?.objects?.lastOrNull {
-                                        sx >= it.x && sx <= it.x + it.w && sy >= it.y && sy <= it.y + it.h
+                                        edHitTest(it.x, it.y, it.w, it.h, it.rotation, sx, sy)
                                     }
                                     if (hit != null) {
                                         selectedId = hit.id; mode = "move"; dragId = hit.id
@@ -814,7 +929,10 @@ fun PdfEditorScreen(state: AppState) {
                                 }
                                 EdTool.Text -> mode = "text"
                                 EdTool.Draw -> { mode = "draw"; draftPoints = listOf(sx to sy) }
-                                EdTool.Highlight, EdTool.Rect, EdTool.Ellipse, EdTool.Line, EdTool.Redact, EdTool.Crop -> {
+                                EdTool.Eraser -> { mode = "erase"; eraseNow(sx, sy) }
+                                EdTool.Highlight, EdTool.Underline, EdTool.Strike, EdTool.Squiggle,
+                                EdTool.Rect, EdTool.Ellipse, EdTool.Line, EdTool.Check, EdTool.Cross,
+                                EdTool.Arrow, EdTool.Redact, EdTool.Crop -> {
                                     mode = "rect"; draftRect = listOf(sx, sy, 0f, 0f)
                                 }
                             }
@@ -831,9 +949,25 @@ fun PdfEditorScreen(state: AppState) {
                                 when (ev.type) {
                                     PointerEventType.Move -> {
                                         if (mode != "none") ch.consume()
-                                        if (!didSnapshot && (mode == "move" || mode == "resize") &&
+                                        if (!didSnapshot && (mode == "move" || mode == "resize" || mode == "rotate") &&
                                             (abs(cx - sx) > 1f || abs(cy - sy) > 1f)) { snapshot(); didSnapshot = true }
                                         when (mode) {
+                                            "rotate" -> {
+                                                // Angle of the pointer around the
+                                                // object's centre, relative to the
+                                                // grab angle — snapped near 15° steps.
+                                                val id = dragId; val startObj = dragStartObj; val p = pages.getOrNull(current)
+                                                if (id != null && startObj != null && p != null) {
+                                                    val ocx = startObj.x + startObj.w / 2f
+                                                    val ocy = startObj.y + startObj.h / 2f
+                                                    val rot = edSnapAngle(startRotation +
+                                                        (edAngleDeg(ocx, ocy, cx, cy) - startAngle))
+                                                    replacePage(current, p.copy(objects = p.objects.map {
+                                                        if (it.id == id) it.copy(rotation = rot) else it
+                                                    }))
+                                                }
+                                            }
+                                            "erase" -> eraseNow(cx, cy)
                                             "move" -> {
                                                 val id = dragId; val p = pages.getOrNull(current)
                                                 if (id != null && p != null) replacePage(current, p.copy(objects = p.objects.map {
@@ -879,13 +1013,33 @@ fun PdfEditorScreen(state: AppState) {
                                             }
                                             "rect" -> {
                                                 val dr = draftRect; draftRect = null
-                                                if (dr != null && dr[2] > 6f && dr[3] > 6f) {
+                                                // Text-markup strokes are thin by
+                                                // nature: they need drag WIDTH,
+                                                // not height.
+                                                val isMarkup = tool == EdTool.Underline || tool == EdTool.Strike ||
+                                                    tool == EdTool.Squiggle
+                                                if (dr != null && (if (isMarkup) dr[2] > 10f else (dr[2] > 6f && dr[3] > 6f))) {
                                                     when (tool) {
                                                         EdTool.Highlight -> addObject(EdObj(nextId++, "highlight", dr[0], dr[1], dr[2], dr[3], color = 0xFFFDE047, opacity = 0.35f))
+                                                        EdTool.Underline -> {
+                                                            val b = edMarkupBox("underline", sx, sy, cx, cy)
+                                                            addObject(EdObj(nextId++, "path", b.x, b.y, b.w, b.h, color = 0xFF111827, strokeWidth = 1.8f, points = listOf(0f to 0.5f, 1f to 0.5f)))
+                                                        }
+                                                        EdTool.Strike -> {
+                                                            val b = edMarkupBox("strike", sx, sy, cx, cy)
+                                                            addObject(EdObj(nextId++, "path", b.x, b.y, b.w, b.h, color = 0xFF111827, strokeWidth = 1.8f, points = listOf(0f to 0.5f, 1f to 0.5f)))
+                                                        }
+                                                        EdTool.Squiggle -> {
+                                                            val b = edMarkupBox("squiggle", sx, sy, cx, cy)
+                                                            addObject(EdObj(nextId++, "path", b.x, b.y, b.w, b.h, color = 0xFF111827, strokeWidth = 1.6f, points = edSquigglePoints()))
+                                                        }
                                                         EdTool.Redact -> addObject(EdObj(nextId++, "redact", dr[0], dr[1], dr[2], dr[3]))
                                                         EdTool.Rect -> addObject(EdObj(nextId++, "rect", dr[0], dr[1], dr[2], dr[3], color = 0xFF7C3AED, strokeWidth = 1.5f))
                                                         EdTool.Ellipse -> addObject(EdObj(nextId++, "ellipse", dr[0], dr[1], dr[2], dr[3], color = 0xFF7C3AED, strokeWidth = 1.5f))
                                                         EdTool.Line -> addObject(EdObj(nextId++, "path", dr[0], dr[1], dr[2], dr[3], color = 0xFF111827, strokeWidth = 1.5f, points = listOf(0f to 0f, 1f to 1f)))
+                                                        EdTool.Check -> addObject(EdObj(nextId++, "path", dr[0], dr[1], dr[2], dr[3], color = 0xFF059669, strokeWidth = 3.2f, points = edCheckPoints()))
+                                                        EdTool.Cross -> addObject(EdObj(nextId++, "path", dr[0], dr[1], dr[2], dr[3], color = 0xFFDC2626, strokeWidth = 3.2f, points = edCrossPoints()))
+                                                        EdTool.Arrow -> addObject(EdObj(nextId++, "path", dr[0], dr[1], dr[2], dr[3], color = 0xFF111827, strokeWidth = 2.6f, points = edArrowPoints()))
                                                         EdTool.Crop -> {
                                                             val p = pages.getOrNull(current)
                                                             if (p != null) {
@@ -942,7 +1096,7 @@ fun PdfEditorScreen(state: AppState) {
             if (wmText.isNotBlank()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(wmText, fontSize = (54 * zoom).sp, fontWeight = FontWeight.Bold,
-                        color = PurplePrimary.copy(alpha = wmOpacity),
+                        color = Color(wmColor).copy(alpha = wmOpacity),
                         modifier = Modifier.graphicsLayer(rotationZ = -30f))
                 }
             }
@@ -987,6 +1141,9 @@ fun PdfEditorScreen(state: AppState) {
                 if (ev.type != KeyEventType.KeyDown || pages.isEmpty()) return@onKeyEvent false
                 val sel = selected
                 when {
+                    ev.key == Key.D && ev.isCtrlPressed -> {
+                        if (sel != null) { duplicateSelected(); true } else false
+                    }
                     ev.key == Key.Delete || ev.key == Key.Backspace -> {
                         if (sel != null) { deleteSelected(); true } else false
                     }
@@ -1147,23 +1304,42 @@ fun PdfEditorScreen(state: AppState) {
                                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                                 EdToolBtn("Add Text", tool == EdTool.Text) { tool = EdTool.Text }
                                 EdToolBtn("Draw", tool == EdTool.Draw) { tool = EdTool.Draw }
-                                EdToolBtn("Highlight", tool == EdTool.Highlight) { tool = EdTool.Highlight }
+                                Box {
+                                    var markOpen by remember { mutableStateOf(false) }
+                                    EdToolBtn("Highlight ▾", tool == EdTool.Highlight || tool == EdTool.Underline ||
+                                        tool == EdTool.Strike || tool == EdTool.Squiggle) { markOpen = true }
+                                    DropdownMenu(expanded = markOpen, onDismissRequest = { markOpen = false }) {
+                                        DropdownMenuItem(text = { Text("Highlight") }, onClick = { tool = EdTool.Highlight; markOpen = false })
+                                        DropdownMenuItem(text = { Text("Underline") }, onClick = { tool = EdTool.Underline; markOpen = false })
+                                        DropdownMenuItem(text = { Text("Strikethrough") }, onClick = { tool = EdTool.Strike; markOpen = false })
+                                        DropdownMenuItem(text = { Text("Squiggle") }, onClick = { tool = EdTool.Squiggle; markOpen = false })
+                                    }
+                                }
                                 Box {
                                     var shapeOpen by remember { mutableStateOf(false) }
-                                    EdToolBtn("Shape ▾", tool == EdTool.Rect || tool == EdTool.Ellipse || tool == EdTool.Line) { shapeOpen = true }
+                                    EdToolBtn("Shape ▾", tool == EdTool.Rect || tool == EdTool.Ellipse || tool == EdTool.Line ||
+                                        tool == EdTool.Check || tool == EdTool.Cross || tool == EdTool.Arrow) { shapeOpen = true }
                                     DropdownMenu(expanded = shapeOpen, onDismissRequest = { shapeOpen = false }) {
                                         DropdownMenuItem(text = { Text("Rectangle") }, onClick = { tool = EdTool.Rect; shapeOpen = false })
                                         DropdownMenuItem(text = { Text("Ellipse") }, onClick = { tool = EdTool.Ellipse; shapeOpen = false })
                                         DropdownMenuItem(text = { Text("Line") }, onClick = { tool = EdTool.Line; shapeOpen = false })
+                                        DropdownMenuItem(text = { Text("Checkmark") }, onClick = { tool = EdTool.Check; shapeOpen = false })
+                                        DropdownMenuItem(text = { Text("Cross") }, onClick = { tool = EdTool.Cross; shapeOpen = false })
+                                        DropdownMenuItem(text = { Text("Arrow") }, onClick = { tool = EdTool.Arrow; shapeOpen = false })
                                     }
                                 }
                                 EdToolBtn("Redact", tool == EdTool.Redact) { tool = EdTool.Redact }
+                                EdToolBtn("Eraser", tool == EdTool.Eraser) { tool = EdTool.Eraser }
                                 EdToolBtn("Add Image", false) { addImageFlow() }
                                 EdToolBtn("Watermark", wmPanel) { wmPanel = !wmPanel }
                                 EdToolBtn("Crop", tool == EdTool.Crop) { tool = EdTool.Crop }
                                 EdToolBtn("Rotate", false) { rotateCurrentPage(90) }
                                 EdToolBtn("↩ Undo", false, enabled = undoStack.isNotEmpty()) { undo() }
                                 EdToolBtn("↪ Redo", false, enabled = redoStack.isNotEmpty()) { redo() }
+                            }
+                            if (tool == EdTool.Eraser) {
+                                Text("Eraser: click or drag over drawings and highlights to remove them.",
+                                    fontSize = 12.sp, color = MutedText, modifier = Modifier.padding(top = 6.dp))
                             }
                             if (wmPanel) {
                                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
@@ -1181,6 +1357,7 @@ fun PdfEditorScreen(state: AppState) {
                         }
                         EdTab.Sign -> {
                             var curStroke by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
+                            var typedName by remember { mutableStateOf("") }
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Box(
                                     Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(10.dp))
@@ -1263,6 +1440,23 @@ fun PdfEditorScreen(state: AppState) {
                                                 Text("✕", fontSize = 12.sp)
                                             }
                                         }
+                                    }
+                                }
+                                // Type-a-signature: the name becomes a
+                                // placeable signature in a script style —
+                                // no drawing needed.
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                    OutlinedTextField(value = typedName, onValueChange = { typedName = it },
+                                        label = { Text("Or type your name") }, singleLine = true,
+                                        shape = RoundedCornerShape(10.dp), modifier = Modifier.width(230.dp))
+                                    EdToolBtn("Place Typed Signature", false, enabled = typedName.isNotBlank()) {
+                                        val name = typedName.trim()
+                                        val (tw, th) = edTextBox(name, 30f)
+                                        addObject(EdObj(nextId++, "text",
+                                            x = pageDims.first * 0.5f, y = pageDims.second * 0.62f, w = tw, h = th,
+                                            text = name, fontSize = 30f, color = 0xFF1E3A8A, fontFamily = "script"))
+                                        statusText = "Signature placed — drag it onto the signature line, rotate it with the round handle if needed."
                                     }
                                 }
                             }
@@ -1406,6 +1600,7 @@ fun EdObjView(o: EdObj, zoom: Float, selected: Boolean) {
     Box(
         Modifier.offset((o.x * zoom).dp, (o.y * zoom).dp)
             .size((o.w * zoom).dp, (o.h * zoom).dp)
+            .graphicsLayer(rotationZ = o.rotation)
     ) {
         when (o.type) {
             "text" -> Text(
@@ -1413,8 +1608,19 @@ fun EdObjView(o: EdObj, zoom: Float, selected: Boolean) {
                 color = Color(o.color),
                 fontSize = (o.fontSize * zoom).sp,
                 fontWeight = if (o.bold) FontWeight.Bold else FontWeight.Normal,
+                fontFamily = when (o.fontFamily) {
+                    "serif" -> FontFamily.Serif
+                    "mono" -> FontFamily.Monospace
+                    "script" -> FontFamily.Cursive
+                    else -> FontFamily.SansSerif
+                },
+                textAlign = when (o.align) {
+                    "center" -> TextAlign.Center
+                    "right" -> TextAlign.Right
+                    else -> TextAlign.Left
+                },
                 lineHeight = (o.fontSize * 1.25f * zoom).sp,
-                modifier = Modifier.alpha(o.opacity)
+                modifier = Modifier.alpha(o.opacity).fillMaxWidth()
             )
             "image" -> {
                 val bmp = remember(o.dataUrl) { o.dataUrl?.let { decodeBitmapFromDataUrl(it) } }
@@ -1448,6 +1654,24 @@ fun EdObjView(o: EdObj, zoom: Float, selected: Boolean) {
         }
         if (selected) {
             Box(Modifier.fillMaxSize().border(1.5.dp, PurplePrimary))
+            // Rotate handle: a knob floating 30 dp above the top-centre
+            // edge, joined by a stem. It lives inside the rotated layer,
+            // so it orbits the object exactly where the canvas hit-test
+            // (edHandlesRotated, gap 30/zoom points) expects it.
+            Box(
+                Modifier.offset((o.w * zoom / 2).dp - 0.75.dp, (-22).dp)
+                    .size(1.5.dp, 22.dp)
+                    .background(PurplePrimary)
+            )
+            Box(
+                Modifier.offset((o.w * zoom / 2).dp - 8.dp, (-38).dp)
+                    .size(16.dp)
+                    .background(Color.White, RoundedCornerShape(8.dp))
+                    .border(1.5.dp, PurplePrimary, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⟳", fontSize = 10.sp, color = PurplePrimary)
+            }
             if (o.type != "text") {
                 edHandles(o).forEach { hp ->
                     Box(
