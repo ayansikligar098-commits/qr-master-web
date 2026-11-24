@@ -480,7 +480,9 @@
         (async function () {
             try {
                 var args = JSON.parse(argsJson || '{}');
-                var img = await qmLoadImage(args.dataUrl);
+                // 'join' loads its own image list (args.images) and has no
+                // single dataUrl — loading one here would fail the whole op.
+                var img = op === 'join' ? null : await qmLoadImage(args.dataUrl);
                 if (op === 'info') {
                     qmSetAsync(key, { ok: true, w: img.naturalWidth, h: img.naturalHeight });
                 } else if (op === 'convert') {
