@@ -1551,9 +1551,12 @@
                     for (var i = 0; i < cells.length; i++) {
                         var cell = cells[i];
                         sctx.drawImage(photo, cell.x, cell.y, cell.w, cell.h);
-                        sctx.strokeStyle = 'rgba(0,0,0,0.18)';
-                        sctx.lineWidth = 1;
-                        sctx.strokeRect(cell.x + 0.5, cell.y + 0.5, cell.w - 1, cell.h - 1);
+                        // Cutting guide: a clearly visible thin outline
+                        // around every photo (the old 1px 18%-black line
+                        // was effectively invisible on the printout).
+                        sctx.strokeStyle = 'rgba(0,0,0,0.55)';
+                        sctx.lineWidth = 2;
+                        sctx.strokeRect(cell.x + 1, cell.y + 1, cell.w - 2, cell.h - 2);
                     }
                     qmSetAsync(key, {
                         ok: true,

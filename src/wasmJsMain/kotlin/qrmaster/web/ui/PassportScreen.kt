@@ -145,6 +145,13 @@ private class PpModel {
     var previewUrl by mutableStateOf("")
     var previewKey by mutableStateOf("")
 
+    // The shell-rendered print sheet shown by the Result preview when
+    // a paper is selected — produced by the SAME renderSheet op and
+    // the SAME layout (m.sheet) as the exported sheet file, so the
+    // preview can never show a different grid than the download.
+    var sheetPreviewUrl by mutableStateOf("")
+    var sheetPreviewKey by mutableStateOf("")
+
     var view by mutableStateOf(PPViewMode.Result)
     var tab by mutableStateOf(0)
     var cropOpen by mutableStateOf(false)
@@ -219,6 +226,8 @@ private class PpModel {
         rtSharp = 0f
         previewUrl = ""
         previewKey = ""
+        sheetPreviewUrl = ""
+        sheetPreviewKey = ""
         view = PPViewMode.Result
         tab = 0
         cropOpen = false
@@ -670,6 +679,36 @@ private fun PpPreview(m: PpModel) {
         if (m.previewUrl.isBlank()) null else decodeBitmapFromDataUrl(m.previewUrl)
     }
 
+    // The sheet preview: whenever a paper is selected, render the
+    // print sheet with the SAME shell op (renderSheet), the SAME
+    // arguments builder (ppSheetArgsJson) and the SAME layout object
+    // (m.sheet) as the exported file — identical copies, positions,
+    // gaps and cutting lines by construction. It re-renders whenever
+    // the composite photo or the layout changes.
+    val sheet = m.sheet
+    val sheetKey = if (sheet == null || sheet.count == 0) "" else
+        m.previewKey + "|" + sheet.paperPxW + "x" + sheet.paperPxH + "|" + sheet.cells.hashCode()
+    LaunchedEffect(sheetKey) {
+        if (sheetKey.isEmpty() || m.sheetPreviewKey == sheetKey) return@LaunchedEffect
+        val sh = m.sheet ?: return@LaunchedEffect
+        // Only tile the CURRENT composite — a stale photo would show
+        // a sheet the download would not produce.
+        if (m.previewUrl.isBlank() || m.previewKey != renderKey) return@LaunchedEffect
+        delay(250)
+        val res = passportCall("renderSheet", ppSheetArgsJson(m.previewUrl, sh, "image/png"))
+        if (res != null && res.asyncOk() && res.asyncStr("dataUrl").isNotBlank()) {
+            m.sheetPreviewUrl = res.asyncStr("dataUrl")
+            m.sheetPreviewKey = sheetKey
+        }
+    }
+    val sheetBmp = remember(m.sheetPreviewUrl) {
+        if (m.sheetPreviewUrl.isBlank()) null else decodeBitmapFromDataUrl(m.sheetPreviewUrl)
+    }
+    // Show the sheet only while it matches the current layout + photo;
+    // a stale sheet (paper/size just changed) falls back to the single
+    // photo until the fresh render lands.
+    val liveSheet = if (sheet != null && sheet.count > 0 && sheetKey.isNotEmpty() && m.sheetPreviewKey == sheetKey) sheet else null
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(PPViewMode.Result to "Result", PPViewMode.Cutout to "Cut-out", PPViewMode.Original to "Original").forEach { (mode, label) ->
@@ -686,20 +725,46 @@ private fun PpPreview(m: PpModel) {
             }
         }
         when (m.view) {
-            PPViewMode.Result -> PpResultPreview(m, cutoutBmp, outfitBmp, compositeBmp)
+            PPViewMode.Result -> PpResultPreview(m, cutoutBmp, outfitBmp, compositeBmp, liveSheet, if (liveSheet != null) sheetBmp else null)
             PPViewMode.Cutout -> PpCutoutPreview(m, cutoutBmp, outfitBmp)
             PPViewMode.Original -> PpOriginalPreview(m, originalBmp)
         }
         Text(
-            "Preview — ${ppFmtMm(m.sizeWmm)} × ${ppFmtMm(m.sizeHmm)} mm · ${m.outW} × ${m.outH} px at 300 DPI",
+            if (m.view == PPViewMode.Result && liveSheet != null)
+                "Preview — print sheet with ${liveSheet.count} copies (${liveSheet.cols} × ${liveSheet.rows}) · ${liveSheet.paperPxW} × ${liveSheet.paperPxH} px at 300 DPI — exactly what Download gives"
+            else
+                "Preview — ${ppFmtMm(m.sizeWmm)} × ${ppFmtMm(m.sizeHmm)} mm · ${m.outW} × ${m.outH} px at 300 DPI",
             fontSize = 12.sp, color = MutedText
         )
     }
 }
 
 @Composable
-private fun PpResultPreview(m: PpModel, cutoutBmp: ImageBitmap?, outfitBmp: ImageBitmap?, compositeBmp: ImageBitmap?) {
+private fun PpResultPreview(m: PpModel, cutoutBmp: ImageBitmap?, outfitBmp: ImageBitmap?, compositeBmp: ImageBitmap?, sheet: PPSheet? = null, sheetBmp: ImageBitmap? = null) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (sheet != null && sheetBmp != null) {
+            // A paper is selected: the preview IS the print sheet — the
+            // very renderSheet output the download produces (same
+            // layout, gaps and cutting lines), scaled into the column.
+            val paperAspect = sheet.paperPxW.toFloat() / sheet.paperPxH.toFloat()
+            val sFrameW = min(maxWidth.value, 470f)
+            val sFrameH = sFrameW / paperAspect
+            Box(
+                Modifier.size(sFrameW.dp, sFrameH.dp).clip(RoundedCornerShape(10.dp))
+                    .background(Color.White)
+                    .border(1.dp, Color(0xFFDDD6F3), RoundedCornerShape(10.dp))
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    drawImage(
+                        image = sheetBmp,
+                        dstOffset = IntOffset.Zero,
+                        dstSize = IntSize(size.width.roundToInt().coerceAtLeast(1), size.height.roundToInt().coerceAtLeast(1)),
+                        filterQuality = FilterQuality.High
+                    )
+                }
+            }
+            return@BoxWithConstraints
+        }
         // A normal passport-photo preview size — never a giant canvas:
         // at most ~380 px wide and ~400 px tall on any screen.
         val frameW = min(maxWidth.value, min(380f, (400.0 * m.aspect).toFloat()))
@@ -1239,6 +1304,16 @@ private fun PpDownload(state: AppState, m: PpModel, scope: CoroutineScope) {
  * Result preview AND by the download, so both render identical pixels
  * (background, crop, face-anchored outfit + rotation, retouch).
  */
+/** renderSheet arguments for one print sheet — the ONE construction
+ *  used by both the exported sheet file and the on-screen sheet
+ *  preview, always from the model's single layout (PpModel.sheet), so
+ *  preview and download can never diverge. */
+private fun ppSheetArgsJson(photoUrl: String, sheet: PPSheet, mime: String): String {
+    val cellsJson = sheet.cells.joinToString(",") { "{\"x\":${it.x},\"y\":${it.y},\"w\":${it.w},\"h\":${it.h}}" }
+    return "{\"photoDataUrl\":\"$photoUrl\",\"paperW\":${sheet.paperPxW},\"paperH\":${sheet.paperPxH}," +
+        "\"cells\":[$cellsJson],\"mime\":\"$mime\",\"quality\":0.92}"
+}
+
 private fun ppRenderArgsJson(m: PpModel, mime: String): String {
     val bg = m.bgDef
     val bgJson = if (bg.isGradient) {
@@ -1279,10 +1354,7 @@ private suspend fun ppDownload(state: AppState, m: PpModel) {
             recordHistory("Passport Photo", "Passport photo ${ppFmtMm(m.sizeWmm)}×${ppFmtMm(m.sizeHmm)} mm", m.fileName)
             state.toast("Downloaded $name")
         } else {
-            val cellsJson = sheet.cells.joinToString(",") { "{\"x\":${it.x},\"y\":${it.y},\"w\":${it.w},\"h\":${it.h}}" }
-            val sArgs = "{\"photoDataUrl\":\"$photoUrl\",\"paperW\":${sheet.paperPxW},\"paperH\":${sheet.paperPxH}," +
-                "\"cells\":[$cellsJson],\"mime\":\"$mime\",\"quality\":0.92}"
-            val sRes = passportCall("renderSheet", sArgs)
+            val sRes = passportCall("renderSheet", ppSheetArgsJson(photoUrl, sheet, mime))
             if (sRes == null || !sRes.asyncOk()) {
                 m.dlError = sRes?.asyncError() ?: "Sheet rendering timed out. Please try again."
                 return

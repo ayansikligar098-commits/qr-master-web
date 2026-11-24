@@ -80,8 +80,8 @@ fun main() {
     mcheck("4R India sheet = 8 copies (4x2)", s4r.count == 8 && s4r.cols == 4 && s4r.rows == 2, "got ${s4r.count} (${s4r.cols}x${s4r.rows})")
     mcheck(
         "4R cells inside paper with margin",
-        s4r.cells.all { it.x >= ppMmToPx(4.0) - 1 && it.y >= ppMmToPx(4.0) - 1 &&
-            it.x + it.w <= s4r.paperPxW - ppMmToPx(4.0) + 1 && it.y + it.h <= s4r.paperPxH - ppMmToPx(4.0) + 1 },
+        s4r.cells.all { it.x >= ppMmToPx(2.0) - 1 && it.y >= ppMmToPx(2.0) - 1 &&
+            it.x + it.w <= s4r.paperPxW - ppMmToPx(2.0) + 1 && it.y + it.h <= s4r.paperPxH - ppMmToPx(2.0) + 1 },
         "sheet=$s4r"
     )
     val sA5 = ppSheetLayout(148.5, 210.0, 35.0, 45.0)

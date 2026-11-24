@@ -10,8 +10,9 @@ import kotlin.math.roundToInt
  * math can be unit-tested on the JVM — see qrtest/PassportGeometryTest.kt.
  *
  * The numbers mirror the Android app's PhotoLogic where the two overlap
- * (mm→px at 300 DPI). Print sheets use a 4 mm margin / 1 mm gap so the
- * standard studio counts fit (35×45 mm on 6×4 in paper = 8 copies).
+ * (mm→px at 300 DPI). Print sheets use a 2 mm margin / 2.5 mm gap so
+ * the standard studio counts fit (35×45 mm on 6×4 in paper = 8 copies)
+ * with comfortable room to cut between copies.
  * Face framing is
  * HEAD-based: the detector's box starts at the forehead, so it is first
  * expanded into a head box (crown above, chin below — see [ppHeadBox])
@@ -519,19 +520,25 @@ data class PPSheet(
     val paperPxW: Int, val paperPxH: Int, val photoPxW: Int, val photoPxH: Int
 )
 
-/** Default print-sheet edge margin (mm). 4 mm stays inside the
- *  printable area of standard photo printers while letting the usual
- *  studio grids fit (e.g. 4 cols of 35 mm on 152.4 mm paper). */
-const val PP_SHEET_MARGIN_MM = 4.0
+/** Default print-sheet edge margin (mm). 2 mm — studios print 4×6
+ *  borderless, and the slimmer edge is what leaves room for a real
+ *  cutting gap between copies (see [PP_SHEET_GAP_MM]) while keeping
+ *  the standard studio grids: 35×45 mm on 6×4 in (4R) paper needs
+ *  2×2 mm margins + 4×35 mm + 3 gaps of 2.5 mm = 151.5 of 152.4 mm. */
+const val PP_SHEET_MARGIN_MM = 2.0
 
-/** Default gap between copies on a print sheet (mm). */
-const val PP_SHEET_GAP_MM = 1.0
+/** Default gap between copies on a print sheet (mm). 2.5 mm of white
+ *  between photos so scissors / a trimmer have room to cut — the old
+ *  1 mm gap was too tight to cut comfortably (owner's report). */
+const val PP_SHEET_GAP_MM = 2.5
 
 /**
  * Grid of copies on a print paper at 300 DPI (row-major positions).
  * Defaults are [PP_SHEET_MARGIN_MM] / [PP_SHEET_GAP_MM], which give
  * the counts photo studios expect — 35×45 mm on 6×4 in (4R) paper is
  * 8 copies (4 × 2). Returns count 0 when even one copy does not fit.
+ * This is the ONE layout used by both the on-screen sheet preview and
+ * the exported sheet file, so the two can never diverge.
  */
 fun ppSheetLayout(
     paperWMm: Double, paperHMm: Double,

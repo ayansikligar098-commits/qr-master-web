@@ -123,19 +123,19 @@ fun main() {
     check("preview top", near(t.top, -fc.y * t.scale, 0.5f), "t=$t")
     check("preview img size", near(t.imgW, 3000f * t.scale, 1f) && near(t.imgH, 4000f * t.scale, 1f), "t=$t")
 
-    // ── Sheet layout (margin 4mm, gap 1mm — studio counts) ──────────────
+    // ── Sheet layout (margin 2mm, gap 2.5mm — studio counts, cutting room) ──
     val s46 = ppSheetLayout(101.6, 152.4, 35.0, 45.0)
     check("4x6 paper px", s46.paperPxW == 1200 && s46.paperPxH == 1800, "sheet=$s46")
     check("4x6 India grid 2x3 = 6", s46.cols == 2 && s46.rows == 3 && s46.count == 6, "sheet cols=${s46.cols} rows=${s46.rows} count=${s46.count}")
-    check("4x6 first cell at margin", s46.cells[0].x == ppMmToPx(4.0) && s46.cells[0].y == ppMmToPx(4.0), "cell=${s46.cells[0]}")
+    check("4x6 first cell at margin", s46.cells[0].x == ppMmToPx(2.0) && s46.cells[0].y == ppMmToPx(2.0), "cell=${s46.cells[0]}")
     check(
         "4x6 second cell offset by copy+gap",
-        s46.cells[1].x == ppMmToPx(4.0) + 413 + ppMmToPx(1.0) && s46.cells[1].y == ppMmToPx(4.0),
+        s46.cells[1].x == ppMmToPx(2.0) + 413 + ppMmToPx(2.5) && s46.cells[1].y == ppMmToPx(2.0),
         "cell=${s46.cells[1]}"
     )
     check(
         "4x6 all cells inside paper with margin",
-        s46.cells.all { it.x + it.w <= s46.paperPxW - ppMmToPx(4.0) + 1 && it.y + it.h <= s46.paperPxH - ppMmToPx(4.0) + 1 },
+        s46.cells.all { it.x + it.w <= s46.paperPxW - ppMmToPx(2.0) + 1 && it.y + it.h <= s46.paperPxH - ppMmToPx(2.0) + 1 },
         "sheet=$s46"
     )
     check("4x6 cell size = photo px", s46.cells.all { it.w == 413 && it.h == 531 }, "sheet=$s46")
