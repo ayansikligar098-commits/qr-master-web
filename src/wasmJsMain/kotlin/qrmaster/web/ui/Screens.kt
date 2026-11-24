@@ -1912,7 +1912,7 @@ fun WalletScreen(state: AppState) {
             title = { Text("Withdraw") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Available balance: ${fmtRupees(state.profile?.walletPaise ?: 0L)} (minimum ₹10, full balance withdraws — same rule as the app).", fontSize = 13.sp)
+                    Text("Available balance: ${fmtRupees(state.profile?.walletPaise ?: 0L)} (minimum ₹20; the full balance is withdrawn).", fontSize = 13.sp)
                     OutlinedTextField(
                         value = upiId,
                         onValueChange = { upiId = it },

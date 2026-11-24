@@ -345,12 +345,15 @@ object SpinLogic {
     data class Config(
         val dailyFree: Int = 3,
         val dailyPremium: Int = 10,
-        val minWithdrawPaise: Long = 1000L,
+        val minWithdrawPaise: Long = 2000L,
         val prize1: Long = 100L,
         val prize2: Long = 200L,
         val a2: Int = 20, val a1: Int = 49,
         val b2: Int = 0, val b1: Int = 15,
         val c2: Int = 0, val c1: Int = 3,
+        val e2: Int = 0, val e1: Int = 2,
+        val f2: Int = 0, val f1: Int = 1,
+        val gJackpotPct: Double = 1.0,
         val a5Pct: Double = 1.0,
         val jackpotPct: Double = 0.90,
         val win10Pct: Double = 0.05,
@@ -380,7 +383,7 @@ object SpinLogic {
                 return Config(
                     dailyFree = intOf("spinDailyFree", 3, 0, 50),
                     dailyPremium = intOf("spinDailyPremium", 10, 0, 50),
-                    minWithdrawPaise = longOf("spinMinWithdrawPaise", 1000L, 100, 1000000),
+                    minWithdrawPaise = longOf("spinMinWithdrawPaise", 2000L, 100, 1000000),
                     prize1 = longOf("spinPrize1", 100L, 0, 100000),
                     prize2 = longOf("spinPrize2", 200L, 0, 100000),
                     a2 = intOf("spinA2", 20, 0, 100),
@@ -389,6 +392,11 @@ object SpinLogic {
                     b1 = intOf("spinB1", 15, 0, 100),
                     c2 = intOf("spinC2", 0, 0, 100),
                     c1 = intOf("spinC1", 3, 0, 100),
+                    e2 = intOf("spinE2", 0, 0, 100),
+                    e1 = intOf("spinE1", 2, 0, 100),
+                    f2 = intOf("spinF2", 0, 0, 100),
+                    f1 = intOf("spinF1", 1, 0, 100),
+                    gJackpotPct = pctOf("spinGJackpotPct", 1.0),
                     a5Pct = pctOf("spinA5Pct", 1.0),
                     jackpotPct = pctOf("spinJackpotPct", 0.90),
                     win10Pct = pctOf("spinWin10Pct", 0.05),
@@ -405,6 +413,7 @@ object SpinLogic {
 
     const val PRIZE5 = 500L; const val PRIZE10 = 1000L; const val PRIZE15 = 1500L; const val PRIZE20 = 2000L
     const val BAND_A = 0; const val BAND_B = 1; const val BAND_C = 2; const val BAND_D = 3
+    const val BAND_E = 4; const val BAND_F = 5; const val BAND_G = 6
 
     fun isEarnBanned(earnBanDate: String?, todayIst: String?): Boolean =
         earnBanDate != null && todayIst != null && earnBanDate == todayIst
@@ -434,7 +443,10 @@ object SpinLogic {
         balancePaise < 500 -> BAND_A
         balancePaise < 800 -> BAND_B
         balancePaise < 900 -> BAND_C
-        else -> BAND_D
+        balancePaise < 1000 -> BAND_D
+        balancePaise < 1500 -> BAND_E
+        balancePaise < 1900 -> BAND_F
+        else -> BAND_G
     }
 
     private fun pct100(pct: Int): Int = pct * 100
@@ -459,11 +471,18 @@ object SpinLogic {
                 roll < t15 -> { win = PRIZE15; directBig = true }
                 roll < t20 -> { win = PRIZE20; directBig = true }
             }
+        } else if (band == BAND_G) {
+            // v48 Band G (₹19–<₹20): only the JACKPOT ₹1 slot (gJackpotPct,
+            // default 1%) — no direct big wins, so a spin can never take
+            // the balance past the ₹20 ceiling (app parity).
+            if (roll < pct100(cfg.gJackpotPct)) win = cfg.prize1
         } else {
             val p2: Int; val p1: Int; val p5: Double
             when (band) {
                 BAND_A -> { p2 = cfg.a2; p1 = cfg.a1; p5 = cfg.a5Pct }
                 BAND_B -> { p2 = cfg.b2; p1 = cfg.b1; p5 = 0.0 }
+                BAND_E -> { p2 = cfg.e2; p1 = cfg.e1; p5 = 0.0 }
+                BAND_F -> { p2 = cfg.f2; p1 = cfg.f1; p5 = 0.0 }
                 else -> { p2 = cfg.c2; p1 = cfg.c1; p5 = 0.0 }
             }
             val t2 = pct100(p2)
@@ -488,7 +507,8 @@ object SpinLogic {
     }
 
     fun isJackpot(cfg: Config, balancePaise: Long, prizePaise: Long): Boolean =
-        prizePaise > 0 && prizePaise <= cfg.prize1 && bandFor(balancePaise) == BAND_D
+        prizePaise > 0 && prizePaise <= cfg.prize1 &&
+            (bandFor(balancePaise) == BAND_D || bandFor(balancePaise) == BAND_G)
 
     fun isDirectBig(balancePaise: Long, prizePaise: Long): Boolean =
         bandFor(balancePaise) == BAND_D &&
