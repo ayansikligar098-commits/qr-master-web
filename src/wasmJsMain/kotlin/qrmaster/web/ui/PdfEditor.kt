@@ -67,11 +67,15 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -295,12 +299,14 @@ fun PdfEditorScreen(state: AppState) {
     var selectedId by remember { mutableStateOf<Int?>(null) }
     var nextId by remember { mutableStateOf(1) }
     var zoom by remember { mutableStateOf(1f) }
-    var zoomTouched by remember { mutableStateOf(false) } // user picked a zoom: stop auto-fitting
+    var zoomMode by remember { mutableStateOf("width") } // "width" (default) | "page" | "manual"
+    var vpSize by remember { mutableStateOf(IntSize.Zero) } // measured page-viewport size, px
+    val vScroll = rememberScrollState() // hoisted: page switches scroll back to the top
     var propsOpen by remember { mutableStateOf(false) } // narrow screens: Properties overlay
     var busy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
-    var previews by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> dataUrl (1.6x)
+    var previews by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> dataUrl (2x)
     var thumbs by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var dims by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(emptyMap()) } // outPage -> displayed pts
     var pageErrors by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> render error (never spin forever)
@@ -371,7 +377,7 @@ fun PdfEditorScreen(state: AppState) {
             dims = dims + (idx to (595.28f to 841.89f))
             return true
         }
-        val scale = if (forThumb) 0.35 else 1.6
+        val scale = if (forThumb) 0.35 else 2.0
         val res = pdfCall("renderPage", buildJsonObject {
             put("pdf", b64); put("page", p.srcIndex + 1); put("scale", scale); put("rotation", p.extraRotation)
         }.toString(), 120_000)
@@ -438,7 +444,7 @@ fun PdfEditorScreen(state: AppState) {
         pages = (0 until capped).map { EdPageState(srcIndex = it) }
         current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
         formFields = emptyList()
-        zoom = 1f; zoomTouched = false; propsOpen = false
+        zoom = 1f; zoomMode = "width"; propsOpen = false
         previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
         // Gate on page 1 actually rendering. The pdf-lib page count above
         // ignores encryption, so without this gate a password-protected
@@ -1785,24 +1791,46 @@ fun PdfEditorScreen(state: AppState) {
                     // viewport — the page is the dominant element ──
                     BoxWithConstraints(
                         Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFECECF3))
+                            .onSizeChanged { vpSize = it }
+                            .onPointerEvent(PointerEventType.Scroll) { ev ->
+                                // Ctrl + mouse wheel zooms (Smallpdf-style);
+                                // a plain wheel keeps scrolling the page.
+                                val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                if (ev.keyboardModifiers.isCtrlPressed && dy != 0f) {
+                                    zoomMode = "manual"
+                                    zoom = (zoom * if (dy < 0f) 1.12f else 0.89f).coerceIn(0.05f, 4f)
+                                    ev.changes.forEach { it.consume() }
+                                }
+                            }
                     ) {
                         val vpW = maxWidth
                         val vpH = maxHeight
-                        LaunchedEffect(vpW, vpH, current, dims[current], zoomTouched) {
-                            if (!zoomTouched) {
-                                val pw = dims[current]?.first ?: 595.28f
-                                val ph = dims[current]?.second ?: 841.89f
-                                // Fit the WHOLE page into the viewport — width
-                                // AND height. Fitting the width alone left tall
-                                // pages cut off at the bottom, with no way for
-                                // the user to see or edit the lower half
-                                // (Ayan's shop report, 25 Nov 2026).
-                                val fit = min((vpW.value - 36f) / pw, (vpH.value - 36f) / ph)
-                                    .coerceIn(0.1f, 1.6f)
-                                if (abs(fit - zoom) > 0.01f) zoom = fit
+                        val densityNow = LocalDensity.current
+                        // Zoom is computed from the MEASURED viewport size.
+                        // Default = Fit-to-Width (Smallpdf behaviour): the
+                        // page fills the workspace width and tall pages
+                        // scroll vertically, so a tall page (birth
+                        // certificate, 1191x1684 pt) opens large and
+                        // readable even in a short window. The old default
+                        // fitted the WHOLE page, so on a short viewport the
+                        // height ratio crushed zoom to the 0.1 floor and the
+                        // page opened at 10%, tiny and unusable — Ayan's
+                        // shop-PC video, 25 Nov 2026, reproduced at
+                        // 1024x560 in the harness.
+                        LaunchedEffect(vpSize, current, dims[current], zoomMode) {
+                            val d = dims[current]
+                            if (d != null && d.first > 0f && d.second > 0f &&
+                                vpSize.width > 0 && vpSize.height > 0 && zoomMode != "manual") {
+                                val availW = vpSize.width / densityNow.density - 32f
+                                val availH = vpSize.height / densityNow.density - 32f
+                                val fitW = (availW / d.first).coerceIn(0.05f, 3f)
+                                val fitP = min(availW / d.first, availH / d.second).coerceIn(0.05f, 3f)
+                                val target = if (zoomMode == "page") fitP else fitW
+                                if (abs(target - zoom) > 0.01f) zoom = target
                             }
                         }
-                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        LaunchedEffect(current) { vScroll.scrollTo(0) }
+                        Column(Modifier.fillMaxSize().verticalScroll(vScroll)) {
                             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                                 val pageDp = ((dims[current]?.first ?: 595.28f) * zoom).dp
                                 val pageHDp = ((dims[current]?.second ?: 841.89f) * zoom).dp
@@ -1831,11 +1859,12 @@ fun PdfEditorScreen(state: AppState) {
                         if (!wide) {
                             TextButton(onClick = { propsOpen = !propsOpen }) { Text("Properties", fontSize = 12.5.sp) }
                         }
-                        TextButton(onClick = { zoomTouched = true; zoom = max(0.4f, zoom - 0.1f) }) { Text("−", fontSize = 16.sp) }
+                        TextButton(onClick = { zoomMode = "manual"; zoom = max(0.1f, zoom - 0.1f) }) { Text("−", fontSize = 16.sp) }
                         Text("${(zoom * 100).toInt()}%", fontSize = 12.5.sp, color = NavyText)
-                        TextButton(onClick = { zoomTouched = true; zoom = min(2.5f, zoom + 0.1f) }) { Text("+", fontSize = 16.sp) }
-                        TextButton(onClick = { zoomTouched = true; zoom = 1f }) { Text("100%", fontSize = 12.5.sp) }
-                        TextButton(onClick = { zoomTouched = false }) { Text("Fit", fontSize = 12.5.sp) }
+                        TextButton(onClick = { zoomMode = "manual"; zoom = min(4f, zoom + 0.1f) }) { Text("+", fontSize = 16.sp) }
+                        TextButton(onClick = { zoomMode = "manual"; zoom = 1f }) { Text("100%", fontSize = 12.5.sp) }
+                        TextButton(onClick = { zoomMode = "width" }) { Text("Fit Width", fontSize = 12.5.sp, fontWeight = if (zoomMode == "width") FontWeight.Bold else FontWeight.Normal) }
+                        TextButton(onClick = { zoomMode = "page" }) { Text("Fit Page", fontSize = 12.5.sp, fontWeight = if (zoomMode == "page") FontWeight.Bold else FontWeight.Normal) }
                     }
                 }
                     if (wide) {
