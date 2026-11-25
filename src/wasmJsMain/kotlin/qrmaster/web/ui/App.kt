@@ -357,7 +357,7 @@ fun App() {
         } catch (e: Exception) { }
     }
     DisposableEffect(Unit) {
-        val listener = {
+        val listener: (org.w3c.dom.events.Event) -> Unit = {
             try { applySlug(state, window.location.pathname) } catch (e: Exception) { }
         }
         window.addEventListener("popstate", listener)
