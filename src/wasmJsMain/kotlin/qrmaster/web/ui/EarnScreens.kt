@@ -293,6 +293,43 @@ fun InviteScreen(state: AppState) {
                 }
             }
         }
+        val refs = info?.referrals ?: emptyList()
+        if (refs.isNotEmpty()) {
+            item { Text("My Referrals", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = NavyText) }
+            items(refs) { r ->
+                WhiteCard(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(horizontal = 15.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(36.dp).clip(CircleShape).background(PurplePrimary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                (r.redeemerName.firstOrNull() ?: r.redeemerEmail.firstOrNull() ?: 'U').uppercaseChar().toString(),
+                                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                            )
+                        }
+                        Spacer(Modifier.width(11.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(r.redeemerName.ifBlank { r.redeemerEmail }, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText, maxLines = 1)
+                            Text(fmtDateTime(r.createdAtMs), fontSize = 11.5.sp, color = MutedText)
+                        }
+                        Text(
+                            if (r.status == "admin-approved") "Approved" else "Success",
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF16A34A)
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                "Note: on the website your device is recognised by this browser. Clearing browser data resets it, so the one-device rule is strongest in the Android app.",
+                fontSize = 11.5.sp, color = MutedText
+            )
+        }
+    }
+}
+
 // ── Help & Support ─────────────────────────────────────────────────────────
 
 // Display categories for the Help & Support form (Ayan's spec, 25 Nov 2026).
