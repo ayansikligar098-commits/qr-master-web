@@ -1378,13 +1378,24 @@
         var pdf = await qmGetJsDoc(pdfB64);
         var pg = await pdf.getPage(pageNum);
         var total = (((pg.rotate || 0) + (extraRotation || 0)) % 360 + 360) % 360;
-        var vp = pg.getViewport({ scale: scale, rotation: total });
+        var base = pg.getViewport({ scale: 1, rotation: total });
+        // Pixel budget: cap the render canvas near 9.5 MP so a huge or
+        // scanned page cannot stall (or get dropped on) a low-end PC.
+        // pw/ph below stay the true point size at any scale.
+        var effScale = scale;
+        var px = base.width * base.height * scale * scale;
+        if (px > 9500000) effScale = scale * Math.sqrt(9500000 / px);
+        var vp = pg.getViewport({ scale: effScale, rotation: total });
         var cv = document.createElement('canvas');
         cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+        var ctx = cv.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
         await qmWithTimeout(
-            pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise,
+            pg.render({ canvasContext: ctx, viewport: vp }).promise,
             60000, 'Timed out while rendering this page.');
-        return { pages: pdf.numPages, image: cv.toDataURL('image/png'), pw: vp.width / scale, ph: vp.height / scale };
+        // White-backed JPEG is ~5-10x lighter than PNG for scanned
+        // pages: much faster decode and far less memory downstream.
+        return { pages: pdf.numPages, image: cv.toDataURL('image/jpeg', 0.85), pw: base.width, ph: base.height };
     }
 
     async function qmEditorExport(args) {

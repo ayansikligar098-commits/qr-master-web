@@ -160,6 +160,9 @@ private object PdfEditorDocCache {
     var pdfB64: String? = null
     var fileName: String = ""
     var pages: List<EdPageState> = emptyList()
+    var previews: Map<Int, String> = emptyMap()
+    var thumbs: Map<Int, String> = emptyMap()
+    var dims: Map<Int, Pair<Float, Float>> = emptyMap()
     var ownerEpoch: Int = -1
 }
 
@@ -309,9 +312,9 @@ fun PdfEditorScreen(state: AppState) {
     var busy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
-    var previews by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> dataUrl (2x)
-    var thumbs by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
-    var dims by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(emptyMap()) } // outPage -> displayed pts
+    var previews by remember { mutableStateOf<Map<Int, String>>(if (cacheLive) PdfEditorDocCache.previews else emptyMap()) } // outPage -> dataUrl (2x)
+    var thumbs by remember { mutableStateOf<Map<Int, String>>(if (cacheLive) PdfEditorDocCache.thumbs else emptyMap()) }
+    var dims by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(if (cacheLive) PdfEditorDocCache.dims else emptyMap()) } // outPage -> displayed pts
     var pageErrors by remember { mutableStateOf<Map<Int, String>>(emptyMap()) } // outPage -> render error (never spin forever)
     var undoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
     var redoStack by remember { mutableStateOf<List<List<EdPageState>>>(emptyList()) }
@@ -412,10 +415,13 @@ fun PdfEditorScreen(state: AppState) {
     // (desktop <-> mobile at 760 dp) can't lose it, and — when this screen
     // was recreated with a document still open — re-render its pages
     // (previews/thumbs/dims start empty after recreation).
-    LaunchedEffect(pdfB64, fileName, pages) {
+    LaunchedEffect(pdfB64, fileName, pages, previews, thumbs, dims) {
         PdfEditorDocCache.pdfB64 = pdfB64
         PdfEditorDocCache.fileName = fileName
         PdfEditorDocCache.pages = pages
+        PdfEditorDocCache.previews = previews
+        PdfEditorDocCache.thumbs = thumbs
+        PdfEditorDocCache.dims = dims
         PdfEditorDocCache.ownerEpoch = entryEpoch
     }
     LaunchedEffect(Unit) {
