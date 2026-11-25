@@ -758,8 +758,6 @@ fun FloatingChip(icon: IconKind, color: Color, modifier: Modifier) {
 
 /* ---------------- 2) All Tools (reference) ---------------- */
 
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-@Composable
 /* The tool catalogue, shared by the All Tools page (sections)
    and the Home page (Popular Tools + category counts). */
 fun qrCatalog(): List<ToolCardDef> = listOf(
@@ -813,6 +811,8 @@ fun earnCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777), desc = "Redeem a bonus code for rewards") { it.navigate(Screen.Bonus) }
     )
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
 fun AllToolsScreen(state: AppState) {
     var chip by remember { mutableStateOf(state.toolsChip) }
     var query by remember { mutableStateOf(state.searchQuery) }
