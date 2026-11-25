@@ -1787,18 +1787,28 @@ fun PdfEditorScreen(state: AppState) {
                         Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFECECF3))
                     ) {
                         val vpW = maxWidth
-                        LaunchedEffect(vpW, current, dims[current], zoomTouched) {
+                        val vpH = maxHeight
+                        LaunchedEffect(vpW, vpH, current, dims[current], zoomTouched) {
                             if (!zoomTouched) {
                                 val pw = dims[current]?.first ?: 595.28f
-                                val fit = ((vpW.value - 36f) / pw).coerceIn(0.3f, 1.6f)
+                                val ph = dims[current]?.second ?: 841.89f
+                                // Fit the WHOLE page into the viewport — width
+                                // AND height. Fitting the width alone left tall
+                                // pages cut off at the bottom, with no way for
+                                // the user to see or edit the lower half
+                                // (Ayan's shop report, 25 Nov 2026).
+                                val fit = min((vpW.value - 36f) / pw, (vpH.value - 36f) / ph)
+                                    .coerceIn(0.1f, 1.6f)
                                 if (abs(fit - zoom) > 0.01f) zoom = fit
                             }
                         }
                         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                                 val pageDp = ((dims[current]?.first ?: 595.28f) * zoom).dp
+                                val pageHDp = ((dims[current]?.second ?: 841.89f) * zoom).dp
                                 val sidePad = maxOf(16.dp, (vpW - pageDp) / 2)
-                                Box(Modifier.padding(horizontal = sidePad, vertical = 16.dp)) {
+                                val topPad = maxOf(16.dp, (vpH - pageHDp) / 2)
+                                Box(Modifier.padding(horizontal = sidePad, vertical = topPad)) {
                                     pageCanvas()
                                 }
                             }
