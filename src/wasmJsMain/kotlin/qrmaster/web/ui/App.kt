@@ -167,8 +167,8 @@ class AppState {
 }
 
 
-/** Hash routing: every screen (plus the PDF mode and QR preset
- *  sub-states) owns a shareable "#/..." URL, e.g. #/pdf-editor.
+/** Path routing: every screen (plus the PDF mode and QR preset
+ *  sub-states) owns a shareable clean URL, e.g. /pdf-editor.
  *  [slugOf] reads the current state; [applySlug] drives the state
  *  from a URL — used for the initial deep link and for the browser
  *  Back/Forward buttons (hashchange). */
@@ -233,7 +233,7 @@ private fun slugOf(state: AppState): String = when (state.screen) {
 }
 
 private fun applySlug(state: AppState, rawHash: String): Boolean {
-    val slug = rawHash.removePrefix("#").removePrefix("/").trim().lowercase()
+    val slug = rawHash.removePrefix("#").removePrefix("/").trim().trim('/').lowercase()
     when (slug) {
         "", "home" -> state.navigate(Screen.Dashboard)
         "all-tools" -> state.navigate(Screen.AllTools)
@@ -339,18 +339,18 @@ fun App() {
         }
     }
 
-    // Hash routing: open a shared link's tool directly, keep the URL
+    // Path routing: open a shared link's tool directly, keep the URL
     // in sync with in-app navigation, and follow Back/Forward.
     LaunchedEffect(Unit) {
-        try { applySlug(state, window.location.hash) } catch (e: Exception) { }
+        try { applySlug(state, window.location.pathname) } catch (e: Exception) { }
     }
     LaunchedEffect(state.screen, state.pdfTool, state.qrPreset) {
         try {
             val slug = slugOf(state)
-            val want = if (slug.isEmpty()) "" else "#/$slug"
-            if (window.location.hash != want) {
-                val url = if (want.isEmpty())
-                    window.location.pathname + window.location.search
+            val want = if (slug.isEmpty()) "/" else "/$slug"
+            if (window.location.pathname != want) {
+                val url = if (want == "/")
+                    want + window.location.search
                 else want
                 window.history.pushState(null, "", url)
             }
@@ -358,10 +358,10 @@ fun App() {
     }
     DisposableEffect(Unit) {
         val listener = {
-            try { applySlug(state, window.location.hash) } catch (e: Exception) { }
+            try { applySlug(state, window.location.pathname) } catch (e: Exception) { }
         }
-        window.addEventListener("hashchange", listener)
-        onDispose { window.removeEventListener("hashchange", listener) }
+        window.addEventListener("popstate", listener)
+        onDispose { window.removeEventListener("popstate", listener) }
     }
 
     QrMasterTheme(darkTheme = state.darkMode) {
