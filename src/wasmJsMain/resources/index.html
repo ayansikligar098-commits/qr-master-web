@@ -1154,14 +1154,21 @@
     window.__qmQrDecode = function (dataUrl) {
         var key = 'qrscan';
         window.__qmAsync[key] = '';
+        function tryDecode(img, scale) {
+            var cv = document.createElement('canvas');
+            cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+            cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+            var ctx = cv.getContext('2d');
+            ctx.drawImage(img, 0, 0, cv.width, cv.height);
+            var data = ctx.getImageData(0, 0, cv.width, cv.height);
+            return jsQR(data.data, cv.width, cv.height);
+        }
         function run() {
             qmLoadImage(dataUrl).then(function (img) {
-                var cv = document.createElement('canvas');
-                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
-                var ctx = cv.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                var data = ctx.getImageData(0, 0, cv.width, cv.height);
-                var code = jsQR(data.data, cv.width, cv.height);
+                var code = tryDecode(img, 1);
+                // Large phone photos often decode better downscaled: jsQR's
+                // binarisation struggles on multi-megapixel images.
+                if (!code && (img.naturalWidth > 800 || img.naturalHeight > 800)) code = tryDecode(img, 0.5);
                 if (code && code.data) qmSetAsync(key, { ok: true, text: code.data });
                 else qmSetAsync(key, { ok: false, error: 'No QR code found in this image.' });
             }).catch(function (e) {
