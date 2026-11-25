@@ -1037,6 +1037,19 @@ fun QrGeneratorScreen(state: AppState) {
     }
     val qr = qrResult?.getOrNull()
     val fgColor = QrColorOptions[colorIndex]
+    // A white QR on a white background downloads as a blank white square
+    // (invisible, unscannable). The background switches to black
+    // automatically so a white QR stays visible and scannable, in the
+    // preview and in the downloaded PNG.
+    val bgColor: Color? = when {
+        transparentBg -> null
+        fgColor == Color.White -> Color(0xFF111111)
+        else -> Color.White
+    }
+    val bgArgb: Int? = bgColor?.let { c ->
+        (0xFF shl 24) or ((c.red * 255).toInt() shl 16) or
+            ((c.green * 255).toInt() shl 8) or (c.blue * 255).toInt()
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -1102,7 +1115,7 @@ fun QrGeneratorScreen(state: AppState) {
                             }
                             if (fgColor == Color.White && !transparentBg) {
                                 Text(
-                                    "White QR on a white background will not scan. Use the Transparent background, or place this QR on a dark surface.",
+                                    "White QR needs a dark background to scan — the background switches to black automatically.",
                                     fontSize = 11.5.sp, color = Color(0xFFDC2626)
                                 )
                             }
@@ -1220,7 +1233,7 @@ fun QrGeneratorScreen(state: AppState) {
                                     Box(Modifier.size(230.dp)) {
                                         QrCanvas(
                                             qr, fgColor,
-                                            if (transparentBg) null else Color.White,
+                                            bgColor,
                                             styles[styleIndex], logoBitmap,
                                             Modifier.fillMaxSize()
                                         )
@@ -1236,7 +1249,7 @@ fun QrGeneratorScreen(state: AppState) {
                                                         (fgColor.blue * 255).toInt()
                                                     val png = PngEncoder.encodeQrStyled(
                                                         qr, 1024, fgArgb,
-                                                        if (transparentBg) null else 0xFFFFFFFF.toInt(),
+                                                        bgArgb,
                                                         styles[styleIndex]
                                                     )
                                                     downloadPngBase64("qr-master-qr.png", Base64.encode(png))
