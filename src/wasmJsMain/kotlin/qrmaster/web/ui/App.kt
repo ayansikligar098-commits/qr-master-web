@@ -33,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -165,6 +166,132 @@ class AppState {
     }
 }
 
+
+/** Hash routing: every screen (plus the PDF mode and QR preset
+ *  sub-states) owns a shareable "#/..." URL, e.g. #/pdf-editor.
+ *  [slugOf] reads the current state; [applySlug] drives the state
+ *  from a URL — used for the initial deep link and for the browser
+ *  Back/Forward buttons (hashchange). */
+private fun slugOf(state: AppState): String = when (state.screen) {
+    Screen.Dashboard -> ""
+    Screen.AllTools -> "all-tools"
+    Screen.QrGenerator -> when (state.qrPreset?.typeLabel) {
+        "Wi-Fi" -> "wifi-qr"
+        "WhatsApp" -> "whatsapp-qr"
+        "Instagram" -> "instagram-qr"
+        "Telegram" -> "telegram-qr"
+        "UPI Payment" -> "upi-qr"
+        "Contact Card" -> "contact-qr"
+        else -> "qr-generator"
+    }
+    Screen.PdfConverter -> when (state.pdfTool) {
+        "Merge PDF" -> "merge-pdf"
+        "Split PDF" -> "split-pdf"
+        "Rotate PDF" -> "rotate-pdf"
+        "PDF to Images" -> "pdf-to-images"
+        "Images to PDF" -> "images-to-pdf"
+        "Watermark" -> "watermark-pdf"
+        "Page Numbers" -> "page-numbers"
+        "PDF Metadata" -> "pdf-metadata"
+        "N-Up Print" -> "n-up-print"
+        else -> "pdf-converter"
+    }
+    Screen.PdfEditor -> "pdf-editor"
+    Screen.CompressPdf -> "compress-pdf"
+    Screen.CompressImage -> "compress-image"
+    Screen.Barcode -> "barcode-generator"
+    Screen.QrScan -> "qr-scanner"
+    Screen.ImageTools -> "image-tools"
+    Screen.Scanner -> "scanner"
+    Screen.RemoveBg -> "remove-background"
+    Screen.ResizeImage -> "resize-image"
+    Screen.PassportPhoto -> "passport-photo"
+    Screen.CompressKb -> "image-compress-kb"
+    Screen.SignatureMaker -> "signature-maker"
+    Screen.CropRotate -> "crop-rotate"
+    Screen.JoinPhotos -> "join-photos"
+    Screen.PhotoEditor -> "photo-editor"
+    Screen.PhotoWatermark -> "photo-watermark"
+    Screen.AgeCalc -> "age-calculator"
+    Screen.BmiCalc -> "bmi-calculator"
+    Screen.UnitConvert -> "unit-converter"
+    Screen.CurrencyConvert -> "currency-converter"
+    Screen.PercentCalc -> "percent-calculator"
+    Screen.Spin -> "spin-earn"
+    Screen.Wallet -> "wallet"
+    Screen.Tasks -> "tasks"
+    Screen.Bonus -> "bonus-code"
+    Screen.Invite -> "invite-earn"
+    Screen.Premium -> "premium"
+    Screen.History -> "history"
+    Screen.Notifications -> "notifications"
+    Screen.Support -> "support"
+    Screen.About -> "about"
+    Screen.Settings -> "settings"
+    Screen.Login -> "login"
+    Screen.Placeholder -> ""
+}
+
+private fun applySlug(state: AppState, rawHash: String): Boolean {
+    val slug = rawHash.removePrefix("#").removePrefix("/").trim().lowercase()
+    when (slug) {
+        "", "home" -> state.navigate(Screen.Dashboard)
+        "all-tools" -> state.navigate(Screen.AllTools)
+        "qr-generator", "website-qr" -> state.openQr(QrPreset("Website URL", "Website URL", "https://"))
+        "wifi-qr" -> state.openQr(QrPreset("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;"))
+        "whatsapp-qr" -> state.openQr(QrPreset("WhatsApp", "WhatsApp Number", "https://wa.me/"))
+        "instagram-qr" -> state.openQr(QrPreset("Instagram", "Instagram Username", "https://instagram.com/"))
+        "telegram-qr" -> state.openQr(QrPreset("Telegram", "Telegram Username", "https://t.me/"))
+        "upi-qr" -> state.openQr(QrPreset("UPI Payment", "UPI ID", "upi://pay?pa=&pn="))
+        "contact-qr" -> state.openQr(QrPreset("Contact Card", "Contact Details", "BEGIN:VCARD\nVERSION:3.0\nFN:\nTEL:\nEND:VCARD"))
+        "pdf-converter" -> state.openPdf("PDF Converter")
+        "merge-pdf" -> state.openPdf("Merge PDF")
+        "split-pdf" -> state.openPdf("Split PDF")
+        "rotate-pdf" -> state.openPdf("Rotate PDF")
+        "pdf-to-images" -> state.openPdf("PDF to Images")
+        "images-to-pdf" -> state.openPdf("Images to PDF")
+        "watermark-pdf" -> state.openPdf("Watermark")
+        "page-numbers" -> state.openPdf("Page Numbers")
+        "pdf-metadata" -> state.openPdf("PDF Metadata")
+        "n-up-print" -> state.openPdf("N-Up Print")
+        "pdf-editor" -> state.navigate(Screen.PdfEditor)
+        "compress-pdf" -> state.navigate(Screen.CompressPdf)
+        "compress-image" -> state.navigate(Screen.CompressImage)
+        "barcode-generator" -> state.navigate(Screen.Barcode)
+        "qr-scanner" -> state.navigate(Screen.QrScan)
+        "image-tools" -> state.navigate(Screen.ImageTools)
+        "scanner" -> state.navigate(Screen.Scanner)
+        "remove-background" -> state.navigate(Screen.RemoveBg)
+        "resize-image" -> state.navigate(Screen.ResizeImage)
+        "passport-photo" -> state.navigate(Screen.PassportPhoto)
+        "image-compress-kb" -> state.navigate(Screen.CompressKb)
+        "signature-maker" -> state.navigate(Screen.SignatureMaker)
+        "crop-rotate" -> state.navigate(Screen.CropRotate)
+        "join-photos" -> state.navigate(Screen.JoinPhotos)
+        "photo-editor" -> state.navigate(Screen.PhotoEditor)
+        "photo-watermark" -> state.navigate(Screen.PhotoWatermark)
+        "age-calculator" -> state.navigate(Screen.AgeCalc)
+        "bmi-calculator" -> state.navigate(Screen.BmiCalc)
+        "unit-converter" -> state.navigate(Screen.UnitConvert)
+        "currency-converter" -> state.navigate(Screen.CurrencyConvert)
+        "percent-calculator" -> state.navigate(Screen.PercentCalc)
+        "spin-earn" -> state.navigate(Screen.Spin)
+        "wallet" -> state.navigate(Screen.Wallet)
+        "tasks" -> state.navigate(Screen.Tasks)
+        "bonus-code" -> state.navigate(Screen.Bonus)
+        "invite-earn" -> state.navigate(Screen.Invite)
+        "premium" -> state.navigate(Screen.Premium)
+        "history" -> state.navigate(Screen.History)
+        "notifications" -> state.navigate(Screen.Notifications)
+        "support" -> state.navigate(Screen.Support)
+        "about" -> state.navigate(Screen.About)
+        "settings" -> state.navigate(Screen.Settings)
+        "login" -> state.navigate(Screen.Login)
+        else -> return false
+    }
+    return true
+}
+
 /**
  * The one download action behind the Home card and the sidebar button:
  * latest APK when the version feed loaded, the public releases page
@@ -210,6 +337,31 @@ fun App() {
             delay(2800)
             state.toastMessage = null
         }
+    }
+
+    // Hash routing: open a shared link's tool directly, keep the URL
+    // in sync with in-app navigation, and follow Back/Forward.
+    LaunchedEffect(Unit) {
+        try { applySlug(state, window.location.hash) } catch (e: Exception) { }
+    }
+    LaunchedEffect(state.screen, state.pdfTool, state.qrPreset) {
+        try {
+            val slug = slugOf(state)
+            val want = if (slug.isEmpty()) "" else "#/$slug"
+            if (window.location.hash != want) {
+                val url = if (want.isEmpty())
+                    window.location.pathname + window.location.search
+                else want
+                window.history.pushState(null, "", url)
+            }
+        } catch (e: Exception) { }
+    }
+    DisposableEffect(Unit) {
+        val listener = {
+            try { applySlug(state, window.location.hash) } catch (e: Exception) { }
+        }
+        window.addEventListener("hashchange", listener)
+        onDispose { window.removeEventListener("hashchange", listener) }
     }
 
     QrMasterTheme(darkTheme = state.darkMode) {
