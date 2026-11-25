@@ -472,7 +472,10 @@ fun SupportScreen(state: AppState) {
             SupportCardsRow(
                 onFaq = { showFaq = true },
                 onGuides = { showGuides = true },
-                onContact = { openExternal("https://wa.me/917048234115?text=Hi%20Kitnook%20Support%2C%20I%20need%20help%20with%20the%20app") }
+                // No public WhatsApp number (Ayan's order, 25 Nov 2026:
+                // his personal number must not leak from the website).
+                // Tapping the card only shows this notice.
+                onContact = { state.toast("WhatsApp Help Support currently Unavailable") }
             )
         }
         item {
