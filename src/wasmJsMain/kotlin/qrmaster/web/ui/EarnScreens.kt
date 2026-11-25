@@ -924,7 +924,7 @@ private fun SupportCategoryField(
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                         modifier = Modifier.width(with(density) { fieldSize.width.toDp() })
                     ) {
-                        LazyColumn(Modifier.heightIn(max = 400.dp).padding(vertical = 6.dp)) {
+                        LazyColumn(Modifier.heightIn(max = 440.dp).padding(vertical = 6.dp)) {
                             itemsIndexed(SUPPORT_CATEGORY_UI) { i, cat ->
                                 Row(
                                     Modifier.fillMaxWidth()
@@ -937,13 +937,13 @@ private fun SupportCategoryField(
                                         )
                                         .onPointerEvent(PointerEventType.Enter) { highlight = i }
                                         .clickable { choose(i) }
-                                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                                        .padding(horizontal = 12.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(
-                                        Modifier.size(30.dp).clip(CircleShape).background(cat.bg),
+                                        Modifier.size(28.dp).clip(CircleShape).background(cat.bg),
                                         contentAlignment = Alignment.Center
-                                    ) { QrIcon(cat.icon, cat.tint, size = 17.dp) }
+                                    ) { QrIcon(cat.icon, cat.tint, size = 15.dp) }
                                     Spacer(Modifier.width(11.dp))
                                     Text(
                                         cat.label, fontSize = 14.sp, color = NavyText,
