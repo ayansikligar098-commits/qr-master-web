@@ -332,6 +332,36 @@
                     });
                     var rbytes = await rdoc.save();
                     qmSetAsync(key, { ok: true, b64: qmBytesToB64(rbytes), pages: rdoc.getPageCount() });
+                } else if (op === 'nup') {
+                    // N-Up Print: pack 2 or 4 source pages onto each A4 sheet
+                    // (2-up = one column of two, 4-up = 2x2 grid). Pages are
+                    // embedded as vectors, so print stays sharp; nothing is
+                    // rasterised. A 10 mm margin is kept on every sheet.
+                    var nsrc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var nper = (args.perSheet === 4) ? 4 : 2;
+                    var ncols = (nper === 4) ? 2 : 1, nrows = 2;
+                    var nout = await PDFDocument.create();
+                    var ntotal = nsrc.getPageCount();
+                    var A4W = 595.28, A4H = 841.89, NM = 28;
+                    var cellW = (A4W - NM * 2) / ncols, cellH = (A4H - NM * 2) / nrows;
+                    for (var ns = 0; ns < ntotal; ns += nper) {
+                        var npage = nout.addPage([A4W, A4H]);
+                        for (var nk = 0; nk < nper && ns + nk < ntotal; nk++) {
+                            var nsp = nsrc.getPage(ns + nk);
+                            var nemb = await nout.embedPage(nsp);
+                            var nrot = nsp.getRotation().angle || 0;
+                            var new_ = ((nrot === 90 || nrot === 270) ? nemb.height : nemb.width);
+                            var neh = ((nrot === 90 || nrot === 270) ? nemb.width : nemb.height);
+                            var nsc = Math.min(cellW / new_, cellH / neh);
+                            var nw = new_ * nsc, nh = neh * nsc;
+                            var ncol = nk % ncols, nrow = Math.floor(nk / ncols);
+                            var nx = NM + ncol * cellW + (cellW - nw) / 2;
+                            var ny = A4H - NM - nrow * cellH - (cellH - nh) / 2 - nh;
+                            npage.drawPage(nemb, { x: nx, y: ny, width: nw, height: nh });
+                        }
+                    }
+                    var nbytes = await nout.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(nbytes), pages: nout.getPageCount(), sourcePages: ntotal, perSheet: nper });
                 } else if (op === 'resave') {
                     var cdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
                     var cbytes = await cdoc.save({ useObjectStreams: true });

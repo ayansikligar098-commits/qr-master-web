@@ -781,6 +781,7 @@ fun pdfCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2), desc = "Rotate PDF pages the right way") { it.openPdf("Rotate PDF") },
         ToolCardDef("Watermark PDF", "", "PDF Tools", IconKind.Star, Color(0xFF9333EA), desc = "Add a text watermark to pages") { it.openPdf("Watermark") },
         ToolCardDef("Page Numbers", "", "PDF Tools", IconKind.FileText, Color(0xFF2563EB), desc = "Add page numbers to your PDF") { it.openPdf("Page Numbers") },
+        ToolCardDef("N-Up Print", "", "PDF Tools", IconKind.Grid, Color(0xFF059669), desc = "Fit 2 or 4 pages on one A4 sheet — save paper") { it.openPdf("N-Up Print") },
         ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B), desc = "View and edit PDF details") { it.openPdf("PDF Metadata") }
     )
 fun imageCatalog(): List<ToolCardDef> = listOf(
@@ -1345,6 +1346,8 @@ fun PdfConverterScreen(state: AppState) {
     var files by remember { mutableStateOf<List<WebFile>>(emptyList()) }
     var pageRange by remember { mutableStateOf("") }
     var angle by remember { mutableStateOf(90) }
+    // N-Up Print tool state: pages packed onto each A4 sheet (2 or 4).
+    var nupPerSheet by remember { mutableStateOf(2) }
     var busy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -1373,7 +1376,7 @@ fun PdfConverterScreen(state: AppState) {
     LaunchedEffect(state.pdfTool) {
         if (state.pdfTool == "Compress PDF") {
             state.navigate(Screen.CompressPdf)
-        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata")) {
+        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print")) {
             selectedTool = state.pdfTool
         } else {
             selectedTool = "Merge PDF"
@@ -1454,6 +1457,7 @@ fun PdfConverterScreen(state: AppState) {
                     Triple("Images to PDF", IconKind.Pdf, Color(0xFFDB2777)),
                     Triple("Watermark", IconKind.Star, Color(0xFF9333EA)),
                     Triple("Page Numbers", IconKind.FileText, Color(0xFF2563EB)),
+                    Triple("N-Up Print", IconKind.Grid, Color(0xFF059669)),
                     Triple("PDF Metadata", IconKind.Info, Color(0xFF64748B))
                 ).forEach { (name, icon, color) ->
                     Column(
@@ -1625,6 +1629,29 @@ fun PdfConverterScreen(state: AppState) {
                                 )
                             }
                         }
+                        "N-Up Print" -> {
+                            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Pages per sheet:", fontSize = 13.sp, color = NavyText)
+                                listOf(2, 4).forEach { n ->
+                                    FilterChip(
+                                        selected = nupPerSheet == n,
+                                        onClick = { nupPerSheet = n },
+                                        label = { Text("$n per sheet", fontSize = 12.5.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                            Text(
+                                if (pageCount != null)
+                                    "$pageCount page(s) will be packed onto ${((pageCount!! + nupPerSheet - 1) / nupPerSheet)} A4 sheet(s) — pages stay sharp, nothing is rasterised."
+                                else
+                                    "Packs several pages onto each A4 sheet, so a print job uses half (2-up) or a quarter (4-up) of the paper. Pages stay sharp — nothing is rasterised.",
+                                fontSize = 12.sp, color = MutedText
+                            )
+                        }
                     }
                     PrimaryToolButton(
                         when (selectedTool) {
@@ -1635,6 +1662,7 @@ fun PdfConverterScreen(state: AppState) {
                             "Images to PDF" -> "Create PDF"
                             "Watermark" -> "Add Watermark"
                             "Page Numbers" -> "Add Page Numbers"
+                            "N-Up Print" -> "Make N-Up PDF"
                             "PDF Metadata" -> "Save Metadata"
                             else -> "Process"
                         },
@@ -1724,6 +1752,18 @@ fun PdfConverterScreen(state: AppState) {
                                     resultName = "metadata.pdf"
                                     statusText = "Metadata saved — download the updated PDF."
                                     recordHistory("PDF Metadata", "Metadata updated", metaTitle)
+                                }
+                            }
+                            "N-Up Print" -> scope.launch {
+                                val f = files.first()
+                                val total = pageCount ?: 0
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                runOp("nup", "{\"pdf\":\"$b64\",\"perSheet\":$nupPerSheet}") { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "n-up.pdf"
+                                    val sheets = res.asyncStr("pages")
+                                    statusText = "Packed $total page(s) onto $sheets A4 sheet(s) ($nupPerSheet per sheet)."
+                                    recordHistory("N-Up Print", "N-up PDF made", "$total pages → $sheets sheets")
                                 }
                             }
                             "PDF to Images" -> scope.launch {
