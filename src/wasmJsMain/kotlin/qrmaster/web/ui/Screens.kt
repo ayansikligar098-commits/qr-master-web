@@ -44,6 +44,10 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -311,6 +315,7 @@ data class ToolCardDef(
     val chip: String,
     val icon: IconKind,
     val color: Color,
+    val desc: String = "",
     val action: (AppState) -> Unit
 )
 
@@ -341,10 +346,6 @@ val HeroQrPalette = listOf(
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DashboardScreen(state: AppState) {
-    var chip by remember { mutableStateOf("All Tools") }
-    val chips = listOf("All Tools", "PDF", "Calculators", "Productivity")
-    val tools = homeTools().filter { chip == "All Tools" || it.chip == chip }.take(9)
-
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -352,52 +353,136 @@ fun DashboardScreen(state: AppState) {
         item { Spacer(Modifier.height(2.dp)) }
         item { HeroBanner(state) }
         item { AppDownloadCard(state) }
-        item {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                chips.forEach { c ->
-                    FilterChip(
-                        selected = chip == c,
-                        onClick = { chip = c },
-                        label = { Text(c, fontSize = 12.5.sp) },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = PurplePrimary,
-                            selectedLabelColor = Color.White
-                        )
-                    )
-                }
-            }
-        }
-        item {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(13.dp),
-                verticalArrangement = Arrangement.spacedBy(13.dp)
-            ) {
-                tools.forEach { t -> HomeToolCard(t) { t.action(state) } }
-                // More Tools card (reference)
-                Column(
-                    Modifier.width(216.dp).height(138.dp)
-                        .shadow(4.dp, RoundedCornerShape(16.dp))
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .clickable { state.navigate(Screen.AllTools) }
-                        .padding(14.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Box(
-                        Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFF1F0FA)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("+", fontSize = 24.sp, color = MutedText, fontWeight = FontWeight.Light)
-                    }
-                    Spacer(Modifier.height(9.dp))
-                    Text("More Tools", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = NavyText)
-                    Text("View All", fontSize = 11.sp, color = MutedText)
-                }
-            }
-        }
+        item { PopularToolsSection(state) }
+        item { ToolCategoriesSection(state) }
         item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+private data class PopTool(
+    val name: String, val desc: String, val icon: IconKind, val color: Color,
+    val target: (AppState) -> Unit
+)
+
+@Composable
+private fun SectionHeaderRow(title: String, onViewAll: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = NavyText)
+        Spacer(Modifier.weight(1f))
+        Text(
+            "View All \u2192",
+            fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = PurplePrimary,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onViewAll() }
+                .padding(horizontal = 6.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun PopularToolsSection(state: AppState) {
+    val popular = listOf(
+        PopTool("PDF Editor", "Edit, annotate & manage PDF files", IconKind.Edit, Color(0xFF7C3AED)) { it.navigate(Screen.PdfEditor) },
+        PopTool("PDF Compress", "Reduce PDF file size without quality loss", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
+        PopTool("Image Compress", "Compress images (JPG, PNG, WebP)", IconKind.Compress, Color(0xFFC2410C)) { it.navigate(Screen.CompressImage) },
+        PopTool("QR Generator", "Create custom QR codes", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) }
+    )
+    Column {
+        SectionHeaderRow("Popular Tools") { state.toolsChip = "All Tools"; state.navigate(Screen.AllTools) }
+        Spacer(Modifier.height(11.dp))
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val cols = when { maxWidth >= 1020.dp -> 4; maxWidth >= 600.dp -> 2; else -> 1 }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                popular.chunked(cols).forEach { rowTools ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        rowTools.forEach { t -> PopularToolCard(t, Modifier.weight(1f)) { t.target(state) } }
+                        repeat(cols - rowTools.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PopularToolCard(t: PopTool, modifier: Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.height(78.dp)
+            .shadow(4.dp, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(t.color.copy(alpha = 0.13f)),
+            contentAlignment = Alignment.Center
+        ) { QrIcon(t.icon, t.color, size = 24.dp) }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(t.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = NavyText, maxLines = 1)
+            Spacer(Modifier.height(2.dp))
+            Text(t.desc, fontSize = 11.5.sp, color = MutedText, maxLines = 2, lineHeight = 14.sp)
+        }
+    }
+}
+
+private data class CatDef(
+    val name: String, val chipKey: String, val icon: IconKind, val color: Color, val count: Int
+)
+
+@Composable
+private fun ToolCategoriesSection(state: AppState) {
+    val cats = listOf(
+        CatDef("PDF Tools", "PDF Tools", IconKind.Pdf, Color(0xFFE11D48), pdfCatalog().size),
+        CatDef("Image Tools", "Image Tools", IconKind.Image, Color(0xFF9333EA), imageCatalog().size),
+        CatDef("QR & Barcode", "QR Tools", IconKind.Barcode, Color(0xFF2563EB), qrCatalog().size),
+        CatDef("Converters", "Converters", IconKind.Swap, Color(0xFF16A34A), converterCatalog().size)
+    )
+    Column {
+        SectionHeaderRow("All Tools by Category") { state.toolsChip = "All Tools"; state.navigate(Screen.AllTools) }
+        Spacer(Modifier.height(11.dp))
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val cols = when { maxWidth >= 1020.dp -> 4; maxWidth >= 600.dp -> 2; else -> 1 }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                cats.chunked(cols).forEach { rowCats ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        rowCats.forEach { c ->
+                            CategoryCard(c, Modifier.weight(1f)) {
+                                state.toolsChip = c.chipKey
+                                state.navigate(Screen.AllTools)
+                            }
+                        }
+                        repeat(cols - rowCats.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryCard(c: CatDef, modifier: Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.height(78.dp)
+            .shadow(4.dp, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(c.color.copy(alpha = 0.13f)),
+            contentAlignment = Alignment.Center
+        ) { QrIcon(c.icon, c.color, size = 24.dp) }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(c.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = NavyText, maxLines = 1)
+            Spacer(Modifier.height(2.dp))
+            Text("${c.count} Tools", fontSize = 11.5.sp, color = MutedText)
+        }
+        Text("\u203A", fontSize = 22.sp, color = MutedText)
     }
 }
 
@@ -422,72 +507,104 @@ fun AppDownloadCard(state: AppState) {
                 )
             )
     ) {
-        val wide = maxWidth >= 640.dp
-        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        val wide = maxWidth >= 680.dp
+        if (wide) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Box(
-                    Modifier.size(54.dp).clip(RoundedCornerShape(14.dp))
+                    Modifier.size(48.dp).clip(RoundedCornerShape(13.dp))
                         .background(Color.White.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center
-                ) {
-                    QrIcon(IconKind.Download, Color.White, size = 28.dp)
-                }
-                Spacer(Modifier.width(16.dp))
+                ) { QrIcon(IconKind.Download, Color.White, size = 26.dp) }
+                Spacer(Modifier.width(15.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         "Get the Kitnook Android App",
-                        color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp
+                        color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 17.5.sp
                     )
-                    Spacer(Modifier.height(3.dp))
+                    Spacer(Modifier.height(2.dp))
                     Text(
-                        "Every tool from this website — plus Spin & Earn, Tasks and your Wallet — in one app on your phone.",
-                        color = Color.White.copy(alpha = 0.88f), fontSize = 12.5.sp, lineHeight = 17.sp
-                    )
-                    Spacer(Modifier.height(5.dp))
-                    Text(
-                        when {
-                            rel != null -> "Version ${rel.versionName} (Build ${rel.versionCode}) • Latest release"
-                            failed -> "Latest version details are unavailable right now"
-                            else -> "Checking for the latest version…"
-                        },
-                        color = Color.White.copy(alpha = 0.75f), fontSize = 11.5.sp
+                        "Every tool from this website \u2014 plus Spin & Earn, Tasks and your Wallet \u2014 in one app on your phone.",
+                        color = Color.White.copy(alpha = 0.88f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2
                     )
                 }
+                Spacer(Modifier.width(15.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        when {
+                            rel != null -> "Version ${rel.versionName}"
+                            failed -> "Version details unavailable"
+                            else -> "Checking latest version\u2026"
+                        },
+                        color = Color.White.copy(alpha = 0.85f), fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(7.dp))
+                    AppDownloadButton(state, loading, rel != null, failed, Modifier)
+                }
             }
-            Spacer(Modifier.height(15.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = if (wide) Arrangement.End else Arrangement.Start
-            ) {
-                Box(
-                    Modifier.then(if (wide) Modifier else Modifier.fillMaxWidth())
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White)
-                        .clickable(enabled = !loading) { downloadAppAction(state) }
-                        .padding(horizontal = 24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (loading) {
-                            CircularProgressIndicator(
-                                Modifier.size(16.dp), color = PurplePrimary, strokeWidth = 2.dp
-                            )
-                        } else {
-                            QrIcon(IconKind.Download, PurplePrimary, size = 18.dp)
-                        }
-                        Spacer(Modifier.width(9.dp))
+        } else {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center
+                    ) { QrIcon(IconKind.Download, Color.White, size = 24.dp) }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Get the Kitnook Android App",
+                            color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp
+                        )
                         Text(
                             when {
-                                rel != null -> "Download APK"
-                                failed -> "View All Releases"
-                                else -> "Please wait…"
+                                rel != null -> "Version ${rel.versionName} (Build ${rel.versionCode}) \u2022 Latest release"
+                                failed -> "Latest version details are unavailable right now"
+                                else -> "Checking for the latest version\u2026"
                             },
-                            color = PurplePrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                            color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp
                         )
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Every tool from this website \u2014 plus Spin & Earn, Tasks and your Wallet \u2014 in one app on your phone.",
+                    color = Color.White.copy(alpha = 0.88f), fontSize = 12.sp, lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(11.dp))
+                AppDownloadButton(state, loading, rel != null, failed, Modifier.fillMaxWidth())
             }
+        }
+    }
+}
+
+@Composable
+private fun AppDownloadButton(state: AppState, loading: Boolean, hasRelease: Boolean, failed: Boolean, modifier: Modifier) {
+    Box(
+        modifier.height(42.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(Color.White)
+            .clickable(enabled = !loading) { downloadAppAction(state) }
+            .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (loading) {
+                CircularProgressIndicator(Modifier.size(15.dp), color = PurplePrimary, strokeWidth = 2.dp)
+            } else {
+                QrIcon(IconKind.Download, PurplePrimary, size = 17.dp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                when {
+                    hasRelease -> "Download APK"
+                    failed -> "View All Releases"
+                    else -> "Please wait\u2026"
+                },
+                color = PurplePrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp
+            )
         }
     }
 }
@@ -643,63 +760,79 @@ fun FloatingChip(icon: IconKind, color: Color, modifier: Modifier) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
+/* The tool catalogue, shared by the All Tools page (sections)
+   and the Home page (Popular Tools + category counts). */
+fun qrCatalog(): List<ToolCardDef> = listOf(
+        ToolCardDef("QR Generator", "", "QR Tools", IconKind.Qr, Color(0xFF4338CA), desc = "Create custom QR codes instantly") { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
+        ToolCardDef("QR Scanner", "", "QR Tools", IconKind.Scan, Color(0xFF0891B2), desc = "Scan and read QR codes") { it.navigate(Screen.QrScan) },
+        ToolCardDef("Wi-Fi QR", "", "QR Tools", IconKind.Zap, Color(0xFF2563EB), desc = "Share Wi-Fi with a QR code") { it.openQr(QrPreset("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;")) },
+        ToolCardDef("Website QR", "", "QR Tools", IconKind.Grid, Color(0xFF059669), desc = "Create a QR for any website") { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
+        ToolCardDef("WhatsApp QR", "", "QR Tools", IconKind.Play, Color(0xFF16A34A), desc = "Open a WhatsApp chat with QR") { it.openQr(QrPreset("WhatsApp", "WhatsApp Number", "https://wa.me/")) },
+        ToolCardDef("Instagram QR", "", "QR Tools", IconKind.Image, Color(0xFFDB2777), desc = "QR for your Instagram profile") { it.openQr(QrPreset("Instagram", "Instagram Username", "https://instagram.com/")) },
+        ToolCardDef("Telegram QR", "", "QR Tools", IconKind.Share, Color(0xFF0284C7), desc = "QR for your Telegram username") { it.openQr(QrPreset("Telegram", "Telegram Username", "https://t.me/")) },
+        ToolCardDef("UPI QR", "", "QR Tools", IconKind.Wallet, Color(0xFF7C3AED), desc = "Accept UPI payments with QR") { it.openQr(QrPreset("UPI Payment", "UPI ID", "upi://pay?pa=&pn=")) },
+        ToolCardDef("Contact QR", "", "QR Tools", IconKind.Users, Color(0xFFEA580C), desc = "Share contact details with QR") { it.openQr(QrPreset("Contact Card", "Contact Details", "BEGIN:VCARD\nVERSION:3.0\nFN:\nTEL:\nEND:VCARD")) },
+        ToolCardDef("Barcode Generator", "", "QR Tools", IconKind.Barcode, Color(0xFF334155), desc = "Create barcodes in seconds") { it.navigate(Screen.Barcode) }
+    )
+fun pdfCatalog(): List<ToolCardDef> = listOf(
+        ToolCardDef("PDF Editor", "", "PDF Tools", IconKind.Edit, Color(0xFF7C3AED), desc = "Edit, annotate and manage PDF files") { it.navigate(Screen.PdfEditor) },
+        ToolCardDef("PDF Converter", "", "PDF Tools", IconKind.Pdf, Color(0xFFE11D48), desc = "Convert files to and from PDF") { it.navigate(Screen.PdfConverter) },
+        ToolCardDef("Merge PDF", "", "PDF Tools", IconKind.Merge, Color(0xFFDC2626), desc = "Combine many PDFs into one") { it.openPdf("Merge PDF") },
+        ToolCardDef("Split PDF", "", "PDF Tools", IconKind.FileText, Color(0xFF7C3AED), desc = "Split a PDF into separate files") { it.openPdf("Split PDF") },
+        ToolCardDef("Compress PDF", "", "PDF Tools", IconKind.Compress, Color(0xFFEA580C), desc = "Reduce PDF file size without quality loss") { it.navigate(Screen.CompressPdf) },
+        ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2), desc = "Rotate PDF pages the right way") { it.openPdf("Rotate PDF") },
+        ToolCardDef("Watermark PDF", "", "PDF Tools", IconKind.Star, Color(0xFF9333EA), desc = "Add a text watermark to pages") { it.openPdf("Watermark") },
+        ToolCardDef("Page Numbers", "", "PDF Tools", IconKind.FileText, Color(0xFF2563EB), desc = "Add page numbers to your PDF") { it.openPdf("Page Numbers") },
+        ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B), desc = "View and edit PDF details") { it.openPdf("PDF Metadata") }
+    )
+fun imageCatalog(): List<ToolCardDef> = listOf(
+        ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A), desc = "All image tools in one place") { it.navigate(Screen.ImageTools) },
+        ToolCardDef("Document Scanner", "", "Image Tools", IconKind.Scan, Color(0xFF2563EB), desc = "Scan documents with your camera") { it.navigate(Screen.Scanner) },
+        ToolCardDef("Compress Image", "", "Image Tools", IconKind.Compress, Color(0xFFEA580C), desc = "Reduce image size without quality loss") { it.navigate(Screen.CompressImage) },
+        ToolCardDef("Compress to KB", "", "Image Tools", IconKind.Compress, Color(0xFFC2410C), desc = "Shrink a photo to an exact KB size") { it.navigate(Screen.CompressKb) },
+        ToolCardDef("Signature Maker", "", "Image Tools", IconKind.Edit, Color(0xFF1D4ED8), desc = "Make a clean signature from a photo") { it.navigate(Screen.SignatureMaker) },
+        ToolCardDef("Crop & Flip", "", "Image Tools", IconKind.Swap, Color(0xFF0891B2), desc = "Crop, rotate and flip photos") { it.navigate(Screen.CropRotate) },
+        ToolCardDef("Join Photos", "", "Image Tools", IconKind.Grid, Color(0xFF059669), desc = "Combine photos into one image") { it.navigate(Screen.JoinPhotos) },
+        ToolCardDef("Photo Editor", "", "Image Tools", IconKind.Star, Color(0xFFDB2777), desc = "Filters, text and quick edits") { it.navigate(Screen.PhotoEditor) },
+        ToolCardDef("Photo Watermark", "", "Image Tools", IconKind.FileText, Color(0xFF7C3AED), desc = "Add your name or logo to photos") { it.navigate(Screen.PhotoWatermark) },
+        ToolCardDef("Remove BG", "", "Image Tools", IconKind.Star, Color(0xFF9333EA), desc = "Remove a photo background in one tap") { it.navigate(Screen.RemoveBg) },
+        ToolCardDef("Passport Photo", "", "Image Tools", IconKind.Users, Color(0xFF0284C7), desc = "Make passport-size photos at home") { it.navigate(Screen.PassportPhoto) },
+        ToolCardDef("Resize Image", "", "Image Tools", IconKind.Edit, Color(0xFF0D9488), desc = "Resize photos to exact pixels or inches") { it.navigate(Screen.ResizeImage) },
+        ToolCardDef("Image to PDF", "", "Image Tools", IconKind.FileText, Color(0xFFDB2777), desc = "Turn photos into a single PDF") { it.openPdf("Images to PDF") }
+    )
+fun converterCatalog(): List<ToolCardDef> = listOf(
+        ToolCardDef("Age Calculator", "", "Converters", IconKind.Calendar, Color(0xFFDB2777), desc = "Find your exact age in seconds") { it.navigate(Screen.AgeCalc) },
+        ToolCardDef("BMI Calculator", "", "Converters", IconKind.Calc, Color(0xFF0284C7), desc = "Check your Body Mass Index") { it.navigate(Screen.BmiCalc) },
+        ToolCardDef("Unit Converter", "", "Converters", IconKind.Swap, Color(0xFF65A30D), desc = "Convert between different units") { it.navigate(Screen.UnitConvert) },
+        ToolCardDef("Currency Converter", "", "Converters", IconKind.Wallet, Color(0xFFCA8A04), desc = "Convert one currency to another") { it.navigate(Screen.CurrencyConvert) },
+        ToolCardDef("Percentage Calculator", "", "Converters", IconKind.Percent, Color(0xFFC026D3), desc = "Calculate percentages in one tap") { it.navigate(Screen.PercentCalc) }
+    )
+fun earnCatalog(): List<ToolCardDef> = listOf(
+        ToolCardDef("Tasks & Earn", "", "More", IconKind.Task, Color(0xFFD97706), desc = "Complete tasks and earn rewards") { it.navigate(Screen.Tasks) },
+        ToolCardDef("Spin & Earn", "", "More", IconKind.Spin, Color(0xFF7C3AED), desc = "Spin the wheel and win daily") { it.navigate(Screen.Spin) },
+        ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777), desc = "Redeem a bonus code for rewards") { it.navigate(Screen.Bonus) }
+    )
+
 fun AllToolsScreen(state: AppState) {
-    var chip by remember { mutableStateOf("All Tools") }
+    var chip by remember { mutableStateOf(state.toolsChip) }
     var query by remember { mutableStateOf(state.searchQuery) }
-    val chips = listOf("All Tools", "QR Tools", "PDF Tools", "Image Tools", "Converters", "More")
+    // (filter key, label shown, icon) — keys stay stable, labels are display text.
+    val tabs = listOf(
+        Triple("All Tools", "All Tools", IconKind.Grid),
+        Triple("PDF Tools", "PDF Tools", IconKind.Pdf),
+        Triple("Image Tools", "Image Tools", IconKind.Image),
+        Triple("QR Tools", "QR & Barcode", IconKind.Barcode),
+        Triple("Converters", "Converters", IconKind.Swap),
+        Triple("More", "More", IconKind.Gift)
+    )
 
     data class SectionDef(val title: String, val chipKey: String, val tools: List<ToolCardDef>)
 
-    val qrTools = listOf(
-        ToolCardDef("QR Generator", "", "QR Tools", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
-        ToolCardDef("QR Scanner", "", "QR Tools", IconKind.Scan, Color(0xFF0891B2)) { it.navigate(Screen.QrScan) },
-        ToolCardDef("Wi-Fi QR", "", "QR Tools", IconKind.Zap, Color(0xFF2563EB)) { it.openQr(QrPreset("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;")) },
-        ToolCardDef("Website QR", "", "QR Tools", IconKind.Grid, Color(0xFF059669)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
-        ToolCardDef("WhatsApp QR", "", "QR Tools", IconKind.Play, Color(0xFF16A34A)) { it.openQr(QrPreset("WhatsApp", "WhatsApp Number", "https://wa.me/")) },
-        ToolCardDef("Instagram QR", "", "QR Tools", IconKind.Image, Color(0xFFDB2777)) { it.openQr(QrPreset("Instagram", "Instagram Username", "https://instagram.com/")) },
-        ToolCardDef("Telegram QR", "", "QR Tools", IconKind.Share, Color(0xFF0284C7)) { it.openQr(QrPreset("Telegram", "Telegram Username", "https://t.me/")) },
-        ToolCardDef("UPI QR", "", "QR Tools", IconKind.Wallet, Color(0xFF7C3AED)) { it.openQr(QrPreset("UPI Payment", "UPI ID", "upi://pay?pa=&pn=")) },
-        ToolCardDef("Contact QR", "", "QR Tools", IconKind.Users, Color(0xFFEA580C)) { it.openQr(QrPreset("Contact Card", "Contact Details", "BEGIN:VCARD\nVERSION:3.0\nFN:\nTEL:\nEND:VCARD")) },
-        ToolCardDef("Barcode Generator", "", "QR Tools", IconKind.Barcode, Color(0xFF334155)) { it.navigate(Screen.Barcode) }
-    )
-    val pdfTools = listOf(
-        ToolCardDef("PDF Editor", "", "PDF Tools", IconKind.Edit, Color(0xFF7C3AED)) { it.navigate(Screen.PdfEditor) },
-        ToolCardDef("PDF Converter", "", "PDF Tools", IconKind.Pdf, Color(0xFFE11D48)) { it.navigate(Screen.PdfConverter) },
-        ToolCardDef("Merge PDF", "", "PDF Tools", IconKind.Merge, Color(0xFFDC2626)) { it.openPdf("Merge PDF") },
-        ToolCardDef("Split PDF", "", "PDF Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.openPdf("Split PDF") },
-        ToolCardDef("Compress PDF", "", "PDF Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
-        ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2)) { it.openPdf("Rotate PDF") },
-        ToolCardDef("Watermark PDF", "", "PDF Tools", IconKind.Star, Color(0xFF9333EA)) { it.openPdf("Watermark") },
-        ToolCardDef("Page Numbers", "", "PDF Tools", IconKind.FileText, Color(0xFF2563EB)) { it.openPdf("Page Numbers") },
-        ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B)) { it.openPdf("PDF Metadata") }
-    )
-    val imageTools = listOf(
-        ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A)) { it.navigate(Screen.ImageTools) },
-        ToolCardDef("Document Scanner", "", "Image Tools", IconKind.Scan, Color(0xFF2563EB)) { it.navigate(Screen.Scanner) },
-        ToolCardDef("Compress Image", "", "Image Tools", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressImage) },
-        ToolCardDef("Compress to KB", "", "Image Tools", IconKind.Compress, Color(0xFFC2410C)) { it.navigate(Screen.CompressKb) },
-        ToolCardDef("Signature Maker", "", "Image Tools", IconKind.Edit, Color(0xFF1D4ED8)) { it.navigate(Screen.SignatureMaker) },
-        ToolCardDef("Crop & Flip", "", "Image Tools", IconKind.Swap, Color(0xFF0891B2)) { it.navigate(Screen.CropRotate) },
-        ToolCardDef("Join Photos", "", "Image Tools", IconKind.Grid, Color(0xFF059669)) { it.navigate(Screen.JoinPhotos) },
-        ToolCardDef("Photo Editor", "", "Image Tools", IconKind.Star, Color(0xFFDB2777)) { it.navigate(Screen.PhotoEditor) },
-        ToolCardDef("Photo Watermark", "", "Image Tools", IconKind.FileText, Color(0xFF7C3AED)) { it.navigate(Screen.PhotoWatermark) },
-        ToolCardDef("Remove BG", "", "Image Tools", IconKind.Star, Color(0xFF9333EA)) { it.navigate(Screen.RemoveBg) },
-        ToolCardDef("Passport Photo", "", "Image Tools", IconKind.Users, Color(0xFF0284C7)) { it.navigate(Screen.PassportPhoto) },
-        ToolCardDef("Resize Image", "", "Image Tools", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },
-        ToolCardDef("Image to PDF", "", "Image Tools", IconKind.FileText, Color(0xFFDB2777)) { it.openPdf("Images to PDF") }
-    )
-    val converters = listOf(
-        ToolCardDef("Age Calculator", "", "Converters", IconKind.Calendar, Color(0xFFDB2777)) { it.navigate(Screen.AgeCalc) },
-        ToolCardDef("BMI Calculator", "", "Converters", IconKind.Calc, Color(0xFF0284C7)) { it.navigate(Screen.BmiCalc) },
-        ToolCardDef("Unit Converter", "", "Converters", IconKind.Swap, Color(0xFF65A30D)) { it.navigate(Screen.UnitConvert) },
-        ToolCardDef("Currency Converter", "", "Converters", IconKind.Wallet, Color(0xFFCA8A04)) { it.navigate(Screen.CurrencyConvert) },
-        ToolCardDef("Percentage Calculator", "", "Converters", IconKind.Percent, Color(0xFFC026D3)) { it.navigate(Screen.PercentCalc) }
-    )
-    val earnTools = listOf(
-        ToolCardDef("Tasks & Earn", "", "More", IconKind.Task, Color(0xFFD97706)) { it.navigate(Screen.Tasks) },
-        ToolCardDef("Spin & Earn", "", "More", IconKind.Spin, Color(0xFF7C3AED)) { it.navigate(Screen.Spin) },
-        ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777)) { it.navigate(Screen.Bonus) }
-    )
+    val qrTools = qrCatalog()
+    val pdfTools = pdfCatalog()
+    val imageTools = imageCatalog()
+    val converters = converterCatalog()
+    val earnTools = earnCatalog()
     val sections = listOf(
         SectionDef("QR & Barcode Tools", "QR Tools", qrTools),
         SectionDef("PDF Tools", "PDF Tools", pdfTools),
@@ -716,25 +849,51 @@ fun AllToolsScreen(state: AppState) {
         verticalArrangement = Arrangement.spacedBy(15.dp)
     ) {
         item { Spacer(Modifier.height(2.dp)) }
-        item { PageHeader(IconKind.Grid, "All Tools", "Explore all powerful tools in one place.") }
         item {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search for tools... (e.g., QR, PDF converter, calculator)", fontSize = 13.sp) },
-                leadingIcon = { QrIcon(IconKind.Search, MutedText, size = 19.dp) },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().widthIn(max = 640.dp)
-            )
+            Column(
+                Modifier.fillMaxWidth()
+                    .shadow(4.dp, RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Color(0xFF7C3AED), Color(0xFF6D28D9), Color(0xFF4F46E5))
+                        )
+                    )
+                    .padding(horizontal = 22.dp, vertical = 20.dp)
+            ) {
+                Text("All Tools", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Explore powerful tools for PDF, Image, QR, Converters and more.",
+                    fontSize = 13.sp, color = Color.White.copy(alpha = 0.88f)
+                )
+                Spacer(Modifier.height(14.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search for tools... (e.g., QR, PDF, compress, convert)", fontSize = 13.sp) },
+                    leadingIcon = { QrIcon(IconKind.Search, MutedText, size = 19.dp) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        disabledContainerColor = Color.White,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
+                )
+            }
         }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                chips.forEach { c ->
+                tabs.forEach { (key, label, icon) ->
                     FilterChip(
-                        selected = chip == c,
-                        onClick = { chip = c },
-                        label = { Text(c, fontSize = 12.5.sp) },
+                        selected = chip == key,
+                        onClick = { chip = key; state.toolsChip = key },
+                        label = { Text(label, fontSize = 12.5.sp) },
+                        leadingIcon = { QrIcon(icon, if (chip == key) Color.White else PurplePrimary, size = 15.dp) },
                         shape = RoundedCornerShape(20.dp),
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = PurplePrimary,
@@ -756,7 +915,21 @@ fun AllToolsScreen(state: AppState) {
             val visible = sec.tools.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
             if (visible.isNotEmpty()) {
                 item {
-                    Text(sec.title, fontSize = 15.5.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(sec.title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = NavyText)
+                        Spacer(Modifier.width(8.dp))
+                        Text("${sec.tools.size} Tools", fontSize = 12.sp, color = MutedText)
+                        Spacer(Modifier.weight(1f))
+                        if (chip == "All Tools" && query.isBlank()) {
+                            Text(
+                                "View All \u2192",
+                                fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = PurplePrimary,
+                                modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                                    .clickable { chip = sec.chipKey; state.toolsChip = sec.chipKey }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                 }
                 item {
                     FlowRow(
@@ -772,26 +945,45 @@ fun AllToolsScreen(state: AppState) {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AllToolCard(t: ToolCardDef, onClick: () -> Unit) {
+    var hovered by remember { mutableStateOf(false) }
     Column(
-        Modifier.width(200.dp).height(120.dp)
-            .shadow(3.dp, RoundedCornerShape(14.dp))
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surface)
+        Modifier.width(216.dp).height(158.dp)
+            .shadow(if (hovered) 10.dp else 4.dp, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        t.color.copy(alpha = if (hovered) 0.16f else 0.09f),
+                        MaterialTheme.colorScheme.surface
+                    )
+                )
+            )
+            .border(1.dp, t.color.copy(alpha = 0.20f), RoundedCornerShape(16.dp))
             .clickable { onClick() }
-            .padding(10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .padding(14.dp)
     ) {
         Box(
-            Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(t.color.copy(alpha = 0.13f)),
+            Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(t.color),
             contentAlignment = Alignment.Center
-        ) {
-            QrIcon(t.icon, t.color, size = 22.dp)
+        ) { QrIcon(t.icon, Color.White, size = 24.dp) }
+        Spacer(Modifier.height(10.dp))
+        Text(t.name, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = NavyText, maxLines = 1)
+        if (t.desc.isNotBlank()) {
+            Spacer(Modifier.height(3.dp))
+            Text(t.desc, fontSize = 11.5.sp, color = MutedText, maxLines = 2, lineHeight = 14.5.sp)
         }
-        Spacer(Modifier.height(8.dp))
-        Text(t.name, fontWeight = FontWeight.Medium, fontSize = 12.5.sp, color = NavyText, maxLines = 2, lineHeight = 15.sp, textAlign = TextAlign.Center)
+        Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Box(
+                Modifier.size(26.dp).clip(CircleShape).background(t.color.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) { Text("\u2192", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = t.color) }
+        }
     }
 }
 

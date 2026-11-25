@@ -99,6 +99,7 @@ class AppState {
     var profileLoading by mutableStateOf(false)
     var darkMode by mutableStateOf(false)
     var searchQuery by mutableStateOf("")
+    var toolsChip by mutableStateOf("All Tools")
     var qrPreset by mutableStateOf<QrPreset?>(null)
     var pdfTool by mutableStateOf("PDF Converter")
     var notifDot by mutableStateOf(false)
