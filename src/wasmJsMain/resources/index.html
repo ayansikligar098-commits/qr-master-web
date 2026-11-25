@@ -2220,8 +2220,13 @@
 </div>
 <script>
     (function () {
+        var root = document.documentElement;
+        var wasClosed = false;
+        try { wasClosed = localStorage.getItem('qm_ads_closed') === '1'; } catch (e) {}
+        if (wasClosed) { root.classList.add('qm-ads-off'); return; }
         document.getElementById('qm-adbar-close').addEventListener('click', function () {
-            document.documentElement.classList.add('qm-ads-off');
+            root.classList.add('qm-ads-off');
+            try { localStorage.setItem('qm_ads_closed', '1'); } catch (e) {}
         });
         var mobile = window.matchMedia('(max-width: 760px)').matches;
         var cfg = mobile
@@ -2238,6 +2243,12 @@
         s.setAttribute('data-cfasync', 'false');
         s.src = 'https://bauval.org/22/' + cfg.key;
         document.getElementById('qm-ad-slot').appendChild(s);
+        // No empty white strip: if no ad fills the slot in time
+        // (blocked or no fill), collapse the bar on its own.
+        setTimeout(function () {
+            var slot = document.getElementById('qm-ad-slot');
+            if (slot && !slot.querySelector('iframe')) root.classList.add('qm-ads-off');
+        }, 7000);
     })();
 </script>
 
