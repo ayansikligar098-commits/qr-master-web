@@ -117,6 +117,35 @@
         return id;
     }
 
+    // ── Foreign drag-listener guard ──────────────────────────────────
+    // The Compose runtime registers its own HTML5 drag listeners on
+    // the app canvas (dragstart/dragenter/dragover/drop) and window.
+    // While they exist, Chrome accepts dragover but never dispatches
+    // 'drop', so real file drags silently die (proven by bisection on
+    // the live site, Nov 2026). The app uses NO Compose drag-and-drop
+    // features — all file dropping is shell-level — so record every
+    // drag listener that is not the shell's own and strip them.
+    window.__qmDragRec = [];
+    window.__qmShellReg = true; // the shell's own registrations follow
+    (function () {
+        var origAdd = EventTarget.prototype.addEventListener;
+        var DRAG_TYPES = { dragstart: 1, drag: 1, dragenter: 1, dragover: 1, dragleave: 1, drop: 1, dragend: 1 };
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+            if (DRAG_TYPES[type] && !window.__qmShellReg && listener) {
+                window.__qmDragRec.push({ target: this, type: type, listener: listener, options: options });
+            }
+            return origAdd.call(this, type, listener, options);
+        };
+    })();
+    function qmStripForeignDragListeners() {
+        var rec = window.__qmDragRec || [];
+        for (var i = 0; i < rec.length; i++) {
+            try { rec[i].target.removeEventListener(rec[i].type, rec[i].listener, rec[i].options); } catch (e) {}
+        }
+        window.__qmDragRec = [];
+    }
+    window.qmStripForeignDragListeners = qmStripForeignDragListeners;
+
     // ── Drag & drop (document level) ─────────────────────────────────────
     (function () {
         var dragDepth = 0;
@@ -131,6 +160,7 @@
         }
         document.addEventListener('dragenter', function (e) {
             e.preventDefault();
+            qmStripForeignDragListeners();
             if (!hasFiles(e)) return;
             dragDepth++;
             var o = overlay(); if (o) o.style.display = 'block';
@@ -155,6 +185,13 @@
             var o = overlay(); if (o) o.style.display = 'none';
         });
     })();
+    window.__qmShellReg = false; // shell registrations are done
+    // Strip the app's drag listeners once it has booted (it registers
+    // them when its canvas is created); the dragenter hook above keeps
+    // stripping any that appear later.
+    [800, 2500, 6000, 12000].forEach(function (ms) {
+        setTimeout(qmStripForeignDragListeners, ms);
+    });
 
     // ── Paste (opt-in per tool) ──────────────────────────────────────────
     // A tool that accepts pasted images sets window.__qmPasteArmed = true
