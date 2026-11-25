@@ -397,7 +397,7 @@ fun QrScanScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP image with a QR code (max 15 MB)") { newFiles ->
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP image with a QR code (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload QR Image") { newFiles ->
                         files = newFiles.take(1)
                         result = null; error = null
                     }

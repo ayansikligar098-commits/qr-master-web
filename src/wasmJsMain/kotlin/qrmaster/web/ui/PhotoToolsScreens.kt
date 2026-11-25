@@ -162,7 +162,7 @@ fun CompressKbScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     val d = dims
                     if (file != null && d != null) {
                         Text("${file.name} — ${d.first} × ${d.second} px • ${formatBytes(file.size)}",
@@ -250,7 +250,7 @@ fun SignatureMakerScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "A clear photo of the signature on plain paper (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "A clear photo of the signature on plain paper (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Signature Photo") { files = it.take(1) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = autoThr, onCheckedChange = { autoThr = it })
                         Text("Automatic ink detection", fontSize = 12.5.sp, color = NavyText)
@@ -342,7 +342,7 @@ fun CropFlipScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     val d = dims
                     if (srcBitmap != null) {
                         Image(
@@ -471,7 +471,7 @@ fun JoinPhotosScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_BATCH_SPEC, "Two or more JPG, PNG or WebP photos (20 MB each)") { newFiles ->
+                    FileZone(state, files, IMAGE_BATCH_SPEC, "Two or more JPG, PNG or WebP photos (20 MB each)", bigUploadButton = true, bigUploadLabel = "Upload Photos") { newFiles ->
                         files = newFiles
                         resultUrl = null
                     }
@@ -557,7 +557,7 @@ fun PhotoEditorScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     if (srcBitmap != null) {
                         Image(
                             srcBitmap, contentDescription = "Original photo",
@@ -673,7 +673,7 @@ fun PhotoWatermarkScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     OutlinedTextField(
                         value = text, onValueChange = { text = it },
                         label = { Text("Watermark text (e.g. your name or shop)") }, singleLine = true,

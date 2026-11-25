@@ -111,7 +111,7 @@ fun ImageToolsScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     if (info != null) Text(info!!, fontSize = 12.5.sp, color = MutedText)
                     Text("Convert to:", fontSize = 12.5.sp, color = MutedText, fontWeight = FontWeight.Medium)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -215,7 +215,7 @@ fun ResizeImageScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG, JPG or WebP (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     val d = dims
                     if (d != null) Text("Current size: ${d.first} × ${d.second} px", fontSize = 12.5.sp, color = MutedText)
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -434,7 +434,7 @@ fun RemoveBgScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "PNG or JPG photo (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "PNG or JPG photo (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Photo") { files = it.take(1) }
                     Text(
                         "First use downloads the removal model once (about 60 MB) — it stays cached on your device, so later visits start instantly. Your photo never leaves this device.",
                         fontSize = 12.sp, color = MutedText
@@ -535,7 +535,7 @@ fun ScannerScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_SPEC, "A clear photo of the document (max 15 MB)") { files = it.take(1) }
+                    FileZone(state, files, IMAGE_SPEC, "A clear photo of the document (max 15 MB)", bigUploadButton = true, bigUploadLabel = "Upload Document Photo") { files = it.take(1) }
                     val d = dims
                     if (d != null) {
                         Text("Photo: ${d.first} × ${d.second} px. Move each corner to the document's corners:", fontSize = 12.5.sp, color = MutedText)

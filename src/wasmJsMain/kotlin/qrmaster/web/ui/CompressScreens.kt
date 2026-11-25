@@ -88,7 +88,7 @@ fun CompressPdfScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, PDF_BIG_SPEC, "PDF only (max 100 MB)") { files = it.take(1) }
+                    FileZone(state, files, PDF_BIG_SPEC, "PDF only (max 100 MB)", bigUploadButton = true, bigUploadLabel = "Upload PDF") { files = it.take(1) }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = targetValue,
@@ -347,7 +347,7 @@ fun CompressImageScreen(state: AppState) {
         item {
             WhiteCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    FileZone(state, files, IMAGE_BATCH_SPEC, "JPG, PNG or WebP — up to 20 files, 20 MB each") { newFiles ->
+                    FileZone(state, files, IMAGE_BATCH_SPEC, "JPG, PNG or WebP — up to 20 files, 20 MB each", bigUploadButton = true, bigUploadLabel = "Upload Images") { newFiles ->
                         files = newFiles
                     }
                     jobs.forEach { job ->

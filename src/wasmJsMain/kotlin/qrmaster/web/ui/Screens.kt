@@ -1004,7 +1004,8 @@ val QrTypes = listOf(
 
 val QrColorOptions = listOf(
     Color(0xFF6D28D9), Color(0xFF2563EB), Color(0xFF16A34A),
-    Color(0xFFEA580C), Color(0xFFDC2626), Color(0xFF111111)
+    Color(0xFFEA580C), Color(0xFFDC2626), Color(0xFF111111),
+    Color(0xFFFFFFFF)
 )
 
 @OptIn(ExperimentalEncodingApi::class)
@@ -1091,13 +1092,19 @@ fun QrGeneratorScreen(state: AppState) {
                                     Box(
                                         Modifier.size(26.dp).clip(CircleShape).background(c)
                                             .border(
-                                                if (colorIndex == i) 2.5.dp else 0.dp,
-                                                if (colorIndex == i) NavyText else Color.Transparent,
+                                                if (colorIndex == i) 2.5.dp else 1.dp,
+                                                if (colorIndex == i) NavyText else Color(0xFFD8D4E8),
                                                 CircleShape
                                             )
                                             .clickable { colorIndex = i }
                                     )
                                 }
+                            }
+                            if (fgColor == Color.White && !transparentBg) {
+                                Text(
+                                    "White QR on a white background will not scan. Use the Transparent background, or place this QR on a dark surface.",
+                                    fontSize = 11.5.sp, color = Color(0xFFDC2626)
+                                )
                             }
                             Text("Background", fontSize = 12.5.sp, color = MutedText)
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1491,7 +1498,9 @@ fun PdfConverterScreen(state: AppState) {
                     FileZone(
                         state, files, toolSpec,
                         if (selectedTool == "Images to PDF") "PNG or JPG images (up to 10)"
-                        else "PDF files (max 25 MB each)"
+                        else "PDF files (max 25 MB each)",
+                        bigUploadButton = true,
+                        bigUploadLabel = if (selectedTool == "Images to PDF") "Upload Images" else "Upload PDF"
                     ) { newFiles -> files = if (multi) newFiles else newFiles.take(1) }
                     if (pageCount != null && selectedTool != "Images to PDF") {
                         Text("This PDF has $pageCount page(s).", fontSize = 12.5.sp, color = MutedText)
