@@ -66,7 +66,9 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -274,6 +276,7 @@ private suspend fun ensureEditorLibs(): String? {
     return if (status == "ready") null else "The PDF engine is still loading. Try again in a moment."
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun PdfEditorScreen(state: AppState) {
     val scope = rememberCoroutineScope()
