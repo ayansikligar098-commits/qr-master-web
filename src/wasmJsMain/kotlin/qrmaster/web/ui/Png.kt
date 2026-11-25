@@ -1,6 +1,7 @@
 package qrmaster.web.ui
 
 import qrmaster.web.qr.QrCode
+import kotlin.math.floor
 
 /** Minimal pure-Kotlin PNG encoder (grayscale, zlib stored blocks). No dependencies. */
 object PngEncoder {
@@ -170,8 +171,11 @@ object PngEncoder {
         return encodeRgba(dim, dim) { x, y ->
             val fx = x.toFloat() / scale - borderModules
             val fy = y.toFloat() / scale - borderModules
-            val mx = fx.toInt()
-            val my = fy.toInt()
+            // floor(), NOT toInt(): toInt() truncates toward zero, so pixels in the
+            // border just left/above module 0 (fx in (-1, 0)) mapped to module 0 and
+            // doubled the first row/column — the downloaded QR was unscannable.
+            val mx = floor(fx).toInt()
+            val my = floor(fy).toInt()
             val dark = mx in 0 until qr.size && my in 0 until qr.size && qr.getModule(mx, my)
             if (!dark) {
                 bg
