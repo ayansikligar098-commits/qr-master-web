@@ -451,13 +451,13 @@ suspend fun EarnApi.myRequests(): List<MyRequest> {
 // Firestore rules only accept the lowercase keys ('bug', 'payment', ...);
 // sending the display label is rejected with PERMISSION_DENIED.
 val SUPPORT_CATEGORIES: List<Pair<String, String>> = listOf(
-    "bug" to "Bug",
-    "payment" to "Payment",
-    "refer" to "Referral",
+    "bug" to "Bug Report",
+    "payment" to "Payment & Subscription",
+    "refer" to "Referral Program",
     "spin" to "Spin & Earn",
-    "task" to "Tasks",
+    "task" to "Tasks & Rewards",
     "bonus" to "Bonus",
-    "wallet" to "Wallet",
+    "wallet" to "Wallet & Withdrawal",
     "credits" to "Credits",
     "notification" to "Notification",
     "other" to "Other"

@@ -24,7 +24,8 @@ enum class IconKind {
     Logo, Home, Grid, Qr, Scan, Barcode, Pdf, Image, Wallet, Spin, Calendar, Gift,
     Task, Users, Play, Crown, Clock, Bell, Gear, Help, Info, Search, Sun, Moon,
     Menu, Download, Upload, Right, Back, Star, Zap, Shield, Merge, Lock, Logout, Eye,
-    EyeOff, Check, Edit, Compress, FileText, Music, Share, Printer, Percent, Calc, Swap
+    EyeOff, Check, Edit, Compress, FileText, Music, Share, Printer, Percent, Calc, Swap,
+    Person, Card, Target, Phone, Bulb, Bug, Dots, Send, Headset, Chat, Book, Ticket
 }
 
 @Composable
@@ -353,6 +354,78 @@ private fun DrawScope.drawIcon(kind: IconKind, c: Color) {
             line(c, 0.62f, 0.2f, 0.78f, 0.34f, w); line(c, 0.62f, 0.48f, 0.78f, 0.34f, w)
             line(c, 0.84f, 0.66f, 0.24f, 0.66f, w)
             line(c, 0.38f, 0.52f, 0.22f, 0.66f, w); line(c, 0.38f, 0.8f, 0.22f, 0.66f, w)
+        }
+        IconKind.Person -> {
+            circle(c, 0.5f, 0.35f, 0.14f, w)
+            poly(c, listOf(0.2f to 0.88f, 0.3f to 0.64f, 0.7f to 0.64f, 0.8f to 0.88f), fill = false)
+        }
+        IconKind.Card -> {
+            rrect(c, 0.06f, 0.24f, 0.88f, 0.52f, 0.07f, w)
+            line(c, 0.06f, 0.4f, 0.94f, 0.4f, w)
+            line(c, 0.16f, 0.62f, 0.44f, 0.62f, w)
+        }
+        IconKind.Target -> {
+            circle(c, 0.5f, 0.5f, 0.36f, w)
+            circle(c, 0.5f, 0.5f, 0.21f, w)
+            circle(c, 0.5f, 0.5f, 0.07f, w, fill = true)
+        }
+        IconKind.Phone -> {
+            rrect(c, 0.31f, 0.06f, 0.38f, 0.88f, 0.08f, w)
+            line(c, 0.44f, 0.16f, 0.56f, 0.16f, w)
+            circle(c, 0.5f, 0.84f, 0.032f, w, fill = true)
+        }
+        IconKind.Bulb -> {
+            circle(c, 0.5f, 0.4f, 0.25f, w)
+            line(c, 0.4f, 0.7f, 0.6f, 0.7f, w)
+            line(c, 0.42f, 0.8f, 0.58f, 0.8f, w)
+            line(c, 0.44f, 0.9f, 0.56f, 0.9f, w)
+        }
+        IconKind.Bug -> {
+            val s = size.width
+            drawOval(c, Offset(0.3f * s, 0.3f * s), Size(0.4f * s, 0.52f * s), style = Stroke(width = w * s))
+            circle(c, 0.5f, 0.2f, 0.09f, w)
+            line(c, 0.42f, 0.14f, 0.3f, 0.05f, w); line(c, 0.58f, 0.14f, 0.7f, 0.05f, w)
+            line(c, 0.5f, 0.32f, 0.5f, 0.8f, w)
+            line(c, 0.31f, 0.44f, 0.1f, 0.34f, w); line(c, 0.29f, 0.58f, 0.08f, 0.58f, w); line(c, 0.31f, 0.72f, 0.1f, 0.82f, w)
+            line(c, 0.69f, 0.44f, 0.9f, 0.34f, w); line(c, 0.71f, 0.58f, 0.92f, 0.58f, w); line(c, 0.69f, 0.72f, 0.9f, 0.82f, w)
+        }
+        IconKind.Dots -> {
+            circle(c, 0.2f, 0.5f, 0.09f, w, fill = true)
+            circle(c, 0.5f, 0.5f, 0.09f, w, fill = true)
+            circle(c, 0.8f, 0.5f, 0.09f, w, fill = true)
+        }
+        IconKind.Send -> {
+            poly(c, listOf(0.1f to 0.52f, 0.9f to 0.1f, 0.64f to 0.9f, 0.46f to 0.62f), fill = false)
+            line(c, 0.46f, 0.62f, 0.9f, 0.1f, w)
+        }
+        IconKind.Headset -> {
+            val s = size.width
+            drawArc(c, startAngle = 180f, sweepAngle = 180f, useCenter = false,
+                topLeft = Offset(0.13f * s, 0.1f * s), size = Size(0.74f * s, 0.74f * s), style = Stroke(width = (w + 0.02f) * s))
+            rrect(c, 0.08f, 0.46f, 0.17f, 0.28f, 0.06f, w)
+            rrect(c, 0.75f, 0.46f, 0.17f, 0.28f, 0.06f, w)
+            line(c, 0.83f, 0.74f, 0.83f, 0.87f, w)
+            line(c, 0.83f, 0.87f, 0.58f, 0.87f, w)
+            circle(c, 0.52f, 0.87f, 0.04f, w, fill = true)
+        }
+        IconKind.Chat -> {
+            rrect(c, 0.09f, 0.14f, 0.82f, 0.55f, 0.11f, w)
+            poly(c, listOf(0.28f to 0.69f, 0.28f to 0.9f, 0.46f to 0.69f), fill = true)
+            circle(c, 0.31f, 0.42f, 0.05f, w, fill = true)
+            circle(c, 0.5f, 0.42f, 0.05f, w, fill = true)
+            circle(c, 0.69f, 0.42f, 0.05f, w, fill = true)
+        }
+        IconKind.Book -> {
+            rrect(c, 0.11f, 0.17f, 0.78f, 0.66f, 0.05f, w)
+            line(c, 0.5f, 0.17f, 0.5f, 0.83f, w)
+            line(c, 0.22f, 0.36f, 0.4f, 0.36f, w); line(c, 0.22f, 0.5f, 0.4f, 0.5f, w)
+            line(c, 0.6f, 0.36f, 0.78f, 0.36f, w); line(c, 0.6f, 0.5f, 0.78f, 0.5f, w)
+        }
+        IconKind.Ticket -> {
+            rrect(c, 0.06f, 0.27f, 0.88f, 0.46f, 0.06f, w)
+            line(c, 0.63f, 0.33f, 0.63f, 0.41f, w); line(c, 0.63f, 0.47f, 0.63f, 0.55f, w); line(c, 0.63f, 0.6f, 0.63f, 0.67f, w)
+            line(c, 0.18f, 0.44f, 0.46f, 0.44f, w)
+            line(c, 0.18f, 0.58f, 0.38f, 0.58f, w)
         }
     }
 }
