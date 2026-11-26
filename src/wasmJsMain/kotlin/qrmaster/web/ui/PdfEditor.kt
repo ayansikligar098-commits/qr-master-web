@@ -688,8 +688,12 @@ fun PdfEditorScreen(state: AppState) {
         }
     }
 
-    fun addTextAt(x: Float, y: Float, initial: String = "Type here") {
-        val (tw, th) = edTextBox(initial, 18f)
+    // New text objects start EMPTY with a "Type here" hint (placeholder,
+    // never content): the old "Type here" default was real text, so an
+    // untouched object burned those words into the downloaded PDF, and
+    // editing it left fragments behind when select-all did not take.
+    fun addTextAt(x: Float, y: Float, initial: String = "") {
+        val (tw, th) = edTextBox(initial.ifBlank { "Type here" }, 18f)
         addObject(EdObj(nextId++, "text", x = x, y = y, w = tw, h = th, text = initial, fontSize = 18f))
     }
 
@@ -729,7 +733,9 @@ fun PdfEditorScreen(state: AppState) {
                                 val (tw, th) = edTextBox(v, sel.fontSize)
                                 mutateSelected { it.copy(text = v, w = tw, h = th) }
                             },
-                            label = { Text("Text") }, shape = RoundedCornerShape(10.dp),
+                            label = { Text("Text") },
+                            placeholder = { Text("Type here") },
+                            shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -1968,8 +1974,10 @@ fun EdObjView(o: EdObj, zoom: Float, selected: Boolean) {
     ) {
         when (o.type) {
             "text" -> Text(
-                o.text,
-                color = Color(o.color),
+                // Empty text shows the hint in grey on the canvas only —
+                // it is never burned into the exported PDF (o.text is "").
+                if (o.text.isBlank()) "Type here" else o.text,
+                color = if (o.text.isBlank()) Color(0xFF94A3B8) else Color(o.color),
                 fontSize = (o.fontSize * zoom).sp,
                 fontWeight = if (o.bold) FontWeight.Bold else FontWeight.Normal,
                 fontFamily = when (o.fontFamily) {

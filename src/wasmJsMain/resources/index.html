@@ -360,6 +360,19 @@
                     copied.forEach(function (p) { odoc.addPage(p); });
                     var obytes = await odoc.save();
                     qmSetAsync(key, { ok: true, b64: qmBytesToB64(obytes), pages: odoc.getPageCount() });
+                } else if (op === 'organize') {
+                    // Organize PDF: rebuild the document in the given page
+                    // order (1-based). Pages left out of the order are
+                    // deleted; at least one page must be kept.
+                    var gdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var gtotal = gdoc.getPageCount();
+                    var gorder = (args.order || []).filter(function (p) { return p >= 1 && p <= gtotal; });
+                    if (!gorder.length) throw new Error('No pages left — keep at least one page.');
+                    var gout = await PDFDocument.create();
+                    var gcopied = await gout.copyPages(gdoc, gorder.map(function (p) { return p - 1; }));
+                    gcopied.forEach(function (p) { gout.addPage(p); });
+                    var gbytes = await gout.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(gbytes), pages: gout.getPageCount() });
                 } else if (op === 'rotate') {
                     var rdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
                     var angle = args.angle || 90;

@@ -782,6 +782,7 @@ fun pdfCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Watermark PDF", "", "PDF Tools", IconKind.Star, Color(0xFF9333EA), desc = "Add a text watermark to pages") { it.openPdf("Watermark") },
         ToolCardDef("Page Numbers", "", "PDF Tools", IconKind.FileText, Color(0xFF2563EB), desc = "Add page numbers to your PDF") { it.openPdf("Page Numbers") },
         ToolCardDef("N-Up Print", "", "PDF Tools", IconKind.Grid, Color(0xFF059669), desc = "Fit 2 or 4 pages on one A4 sheet — save paper") { it.openPdf("N-Up Print") },
+        ToolCardDef("Organize PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0D9488), desc = "Reorder or delete pages in a PDF") { it.openPdf("Organize PDF") },
         ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B), desc = "View and edit PDF details") { it.openPdf("PDF Metadata") }
     )
 fun imageCatalog(): List<ToolCardDef> = listOf(
@@ -1368,6 +1369,9 @@ fun PdfConverterScreen(state: AppState) {
     var angle by remember { mutableStateOf(90) }
     // N-Up Print tool state: pages packed onto each A4 sheet (2 or 4).
     var nupPerSheet by remember { mutableStateOf(2) }
+    // Organize PDF tool state: the page order (1-based); pages missing
+    // from the list are deleted from the downloaded PDF.
+    var orgOrder by remember { mutableStateOf<List<Int>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -1396,7 +1400,7 @@ fun PdfConverterScreen(state: AppState) {
     LaunchedEffect(state.pdfTool) {
         if (state.pdfTool == "Compress PDF") {
             state.navigate(Screen.CompressPdf)
-        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print")) {
+        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print", "Organize PDF")) {
             selectedTool = state.pdfTool
         } else {
             selectedTool = "Merge PDF"
@@ -1406,6 +1410,7 @@ fun PdfConverterScreen(state: AppState) {
         files = emptyList()
         resultB64 = null; pageImages = emptyList(); pageCount = null
         statusText = null; errorText = null
+        orgOrder = emptyList()
     }
 
     val toolSpec = if (selectedTool == "Images to PDF") IMAGE_SPEC else PDF_SPEC
@@ -1438,6 +1443,10 @@ fun PdfConverterScreen(state: AppState) {
     LaunchedEffect(files.firstOrNull()?.id, selectedTool) {
         pageCount = null
         if (selectedTool != "Images to PDF" && files.isNotEmpty()) loadFirstPdfCount()
+    }
+    // Organize PDF: a newly loaded file starts in its natural page order.
+    LaunchedEffect(pageCount) {
+        if (pageCount != null) orgOrder = (1..pageCount!!).toList()
     }
     // PDF Metadata: read the file's current metadata into the form.
     LaunchedEffect(files.firstOrNull()?.id, selectedTool) {
@@ -1478,6 +1487,7 @@ fun PdfConverterScreen(state: AppState) {
                     Triple("Watermark", IconKind.Star, Color(0xFF9333EA)),
                     Triple("Page Numbers", IconKind.FileText, Color(0xFF2563EB)),
                     Triple("N-Up Print", IconKind.Grid, Color(0xFF059669)),
+                    Triple("Organize PDF", IconKind.Swap, Color(0xFF0D9488)),
                     Triple("PDF Metadata", IconKind.Info, Color(0xFF64748B))
                 ).forEach { (name, icon, color) ->
                     Column(
@@ -1674,6 +1684,44 @@ fun PdfConverterScreen(state: AppState) {
                                 fontSize = 12.sp, color = MutedText
                             )
                         }
+                        "Organize PDF" -> {
+                            val order = orgOrder.ifEmpty { (1..(pageCount ?: 0)).toList() }
+                            if (files.isEmpty()) {
+                                Text("Choose a PDF to reorder or delete its pages.",
+                                    fontSize = 12.5.sp, color = MutedText)
+                            } else if (pageCount == null) {
+                                Text("Reading page count…", fontSize = 12.5.sp, color = MutedText)
+                            } else {
+                                Text("Move pages up or down, or remove the ones you don't need. Removed pages are gone from the downloaded PDF.",
+                                    fontSize = 12.sp, color = MutedText)
+                                val movePage: (Int, Int) -> Unit = { from, to ->
+                                    val m = order.toMutableList()
+                                    val v = m.removeAt(from)
+                                    m.add(to, v)
+                                    orgOrder = m
+                                }
+                                order.forEachIndexed { idx, p ->
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Page $p", fontSize = 13.sp, color = NavyText,
+                                            modifier = Modifier.weight(1f))
+                                        TextButton(onClick = { movePage(idx, idx - 1) }, enabled = idx > 0) {
+                                            Text("↑", fontSize = 15.sp)
+                                        }
+                                        TextButton(onClick = { movePage(idx, idx + 1) }, enabled = idx < order.size - 1) {
+                                            Text("↓", fontSize = 15.sp)
+                                        }
+                                        TextButton(
+                                            onClick = { orgOrder = order - p },
+                                            enabled = order.size > 1
+                                        ) { Text("✕", fontSize = 14.sp) }
+                                    }
+                                }
+                            }
+                        }
                     }
                     PrimaryToolButton(
                         when (selectedTool) {
@@ -1685,6 +1733,7 @@ fun PdfConverterScreen(state: AppState) {
                             "Watermark" -> "Add Watermark"
                             "Page Numbers" -> "Add Page Numbers"
                             "N-Up Print" -> "Make N-Up PDF"
+                            "Organize PDF" -> "Save Organized PDF"
                             "PDF Metadata" -> "Save Metadata"
                             else -> "Process"
                         },
@@ -1788,6 +1837,18 @@ fun PdfConverterScreen(state: AppState) {
                                     recordHistory("N-Up Print", "N-up PDF made", "$total pages → $sheets sheets")
                                 }
                             }
+                            "Organize PDF" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                val order = orgOrder.ifEmpty { (1..(pageCount ?: 0)).toList() }
+                                if (order.isEmpty()) { errorText = "Keep at least one page."; return@launch }
+                                runOp("organize", "{\"pdf\":\"$b64\",\"order\":[${order.joinToString(",")}]}") { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "organized.pdf"
+                                    statusText = "Saved ${res.asyncStr("pages")} page(s) in your new order."
+                                    recordHistory("Organize PDF", "Pages organized", order.joinToString(","))
+                                }
+                            }
                             "PDF to Images" -> scope.launch {
                                 val f = files.first()
                                 val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
@@ -1820,6 +1881,10 @@ fun PdfConverterScreen(state: AppState) {
                                 }
                             }
                         }
+                    }
+                    if (selectedTool == "Merge PDF" && files.isNotEmpty() && files.size < 2) {
+                        Text("Merge needs at least 2 PDFs — upload one more file.",
+                            fontSize = 12.5.sp, color = MutedText)
                     }
                     if (busy) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
