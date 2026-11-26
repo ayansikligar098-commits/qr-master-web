@@ -238,7 +238,7 @@ private fun applySlug(state: AppState, rawHash: String): Boolean {
     when (slug) {
         "", "home" -> state.navigate(Screen.Dashboard)
         "all-tools" -> state.navigate(Screen.AllTools)
-        "qr-generator", "website-qr" -> state.openQr(QrPreset("Website URL", "Website URL", "https://"))
+        "qr-generator", "website-qr" -> state.openQr(QrPreset("Website URL", "Website URL", ""))
         "wifi-qr" -> state.openQr(QrPreset("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;"))
         "whatsapp-qr" -> state.openQr(QrPreset("WhatsApp", "WhatsApp Number", "https://wa.me/"))
         "instagram-qr" -> state.openQr(QrPreset("Instagram", "Instagram Username", "https://instagram.com/"))

@@ -320,7 +320,7 @@ data class ToolCardDef(
 )
 
 fun homeTools(): List<ToolCardDef> = listOf(
-    ToolCardDef("QR Generator", "QR Tools", "Productivity", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
+    ToolCardDef("QR Generator", "QR Tools", "Productivity", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "")) },
     ToolCardDef("PDF Converter", "PDF Tools", "PDF", IconKind.Pdf, Color(0xFFE11D48)) { it.navigate(Screen.PdfConverter) },
     ToolCardDef("Image Tools", "Edit & Convert", "Productivity", IconKind.Image, Color(0xFF16A34A)) { it.navigate(Screen.ImageTools) },
     ToolCardDef("Document Scanner", "Scan & PDF", "Productivity", IconKind.Scan, Color(0xFF2563EB)) { it.navigate(Screen.Scanner) },
@@ -384,7 +384,7 @@ private fun PopularToolsSection(state: AppState) {
         PopTool("PDF Editor", "Edit, annotate & manage PDF files", IconKind.Edit, Color(0xFF7C3AED)) { it.navigate(Screen.PdfEditor) },
         PopTool("PDF Compress", "Reduce PDF file size without quality loss", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
         PopTool("Image Compress", "Compress images (JPG, PNG, WebP)", IconKind.Compress, Color(0xFFC2410C)) { it.navigate(Screen.CompressImage) },
-        PopTool("QR Generator", "Create custom QR codes", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "https://")) }
+        PopTool("QR Generator", "Create custom QR codes", IconKind.Qr, Color(0xFF4338CA)) { it.openQr(QrPreset("Website URL", "Website URL", "")) }
     )
     Column {
         SectionHeaderRow("Popular Tools") { state.toolsChip = "All Tools"; state.navigate(Screen.AllTools) }
@@ -761,10 +761,10 @@ fun FloatingChip(icon: IconKind, color: Color, modifier: Modifier) {
 /* The tool catalogue, shared by the All Tools page (sections)
    and the Home page (Popular Tools + category counts). */
 fun qrCatalog(): List<ToolCardDef> = listOf(
-        ToolCardDef("QR Generator", "", "QR Tools", IconKind.Qr, Color(0xFF4338CA), desc = "Create custom QR codes instantly") { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
+        ToolCardDef("QR Generator", "", "QR Tools", IconKind.Qr, Color(0xFF4338CA), desc = "Create custom QR codes instantly") { it.openQr(QrPreset("Website URL", "Website URL", "")) },
         ToolCardDef("QR Scanner", "", "QR Tools", IconKind.Scan, Color(0xFF0891B2), desc = "Scan and read QR codes") { it.navigate(Screen.QrScan) },
         ToolCardDef("Wi-Fi QR", "", "QR Tools", IconKind.Zap, Color(0xFF2563EB), desc = "Share Wi-Fi with a QR code") { it.openQr(QrPreset("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;")) },
-        ToolCardDef("Website QR", "", "QR Tools", IconKind.Grid, Color(0xFF059669), desc = "Create a QR for any website") { it.openQr(QrPreset("Website URL", "Website URL", "https://")) },
+        ToolCardDef("Website QR", "", "QR Tools", IconKind.Grid, Color(0xFF059669), desc = "Create a QR for any website") { it.openQr(QrPreset("Website URL", "Website URL", "")) },
         ToolCardDef("WhatsApp QR", "", "QR Tools", IconKind.Play, Color(0xFF16A34A), desc = "Open a WhatsApp chat with QR") { it.openQr(QrPreset("WhatsApp", "WhatsApp Number", "https://wa.me/")) },
         ToolCardDef("Instagram QR", "", "QR Tools", IconKind.Image, Color(0xFFDB2777), desc = "QR for your Instagram profile") { it.openQr(QrPreset("Instagram", "Instagram Username", "https://instagram.com/")) },
         ToolCardDef("Telegram QR", "", "QR Tools", IconKind.Share, Color(0xFF0284C7), desc = "QR for your Telegram username") { it.openQr(QrPreset("Telegram", "Telegram Username", "https://t.me/")) },
@@ -994,7 +994,7 @@ fun AllToolCard(t: ToolCardDef, onClick: () -> Unit) {
 data class QrTypeDef(val label: String, val fieldLabel: String, val template: String)
 
 val QrTypes = listOf(
-    QrTypeDef("Website URL", "Website URL", "https://"),
+    QrTypeDef("Website URL", "Website URL", ""),
     QrTypeDef("Plain Text", "Your Text", ""),
     QrTypeDef("UPI Payment", "UPI ID", "upi://pay?pa=&pn="),
     QrTypeDef("Wi-Fi", "Wi-Fi Name (SSID)", "WIFI:T:WPA;S:;P:;;"),
@@ -1014,7 +1014,7 @@ val QrColorOptions = listOf(
 fun QrGeneratorScreen(state: AppState) {
     val scope = rememberCoroutineScope()
     var typeIndex by remember { mutableStateOf(0) }
-    var content by remember { mutableStateOf("https://qrmaster.app") }
+    var content by remember { mutableStateOf("") }
     var colorIndex by remember { mutableStateOf(0) }
     var transparentBg by remember { mutableStateOf(false) }
     var styleIndex by remember { mutableStateOf(0) }
@@ -1093,6 +1093,7 @@ fun QrGeneratorScreen(state: AppState) {
                             OutlinedTextField(
                                 value = content,
                                 onValueChange = { content = it },
+                                placeholder = { Text("https://example.com", color = MutedText) },
                                 singleLine = false,
                                 minLines = 1,
                                 maxLines = 3,
