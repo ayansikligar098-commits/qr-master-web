@@ -524,6 +524,51 @@
                     });
                     var nbytes = await ndoc.save();
                     qmSetAsync(key, { ok: true, b64: qmBytesToB64(nbytes), pages: ntotal });
+                } else if (op === 'signPdf') {
+                    // Sign PDF: stamp a signature image (PNG, else JPG) or a
+                    // typed name (slanted, like a signature) onto the chosen
+                    // page(s). Signature image wins when both are given.
+                    var sdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
+                    var stotal = sdoc.getPageCount();
+                    var stargets = [];
+                    if (args.pages === 'all') { for (var si = 0; si < stotal; si++) stargets.push(si); }
+                    else if (args.pages === 'first') { stargets.push(0); }
+                    else { stargets.push(stotal - 1); }
+                    var sw = parseFloat(args.width) || 150;
+                    var spos = args.position || 'bottom-right';
+                    if (args.sig) {
+                        var sbytes = qmB64ToBytes(args.sig);
+                        var simg;
+                        try { simg = await sdoc.embedPng(sbytes); }
+                        catch (e) { simg = await sdoc.embedJpg(sbytes); }
+                        var sratio = simg.width / simg.height;
+                        var sh = sw / sratio;
+                        stargets.forEach(function (pi) {
+                            var pg = sdoc.getPage(pi); var sz = pg.getSize();
+                            var sx = spos.indexOf('left') >= 0 ? 36
+                                : (spos.indexOf('centre') >= 0 || spos.indexOf('center') >= 0) ? (sz.width - sw) / 2
+                                : sz.width - 36 - sw;
+                            var sy = spos.indexOf('top') === 0 ? sz.height - 36 - sh : 36;
+                            pg.drawImage(simg, { x: sx, y: sy, width: sw, height: sh });
+                        });
+                    } else if (args.name && args.name.trim()) {
+                        var sfont = await sdoc.embedFont(PDFLib.StandardFonts.HelveticaOblique);
+                        var stxt = args.name.trim();
+                        var ssize = 20;
+                        var stw = sfont.widthOfTextAtSize(stxt, ssize);
+                        if (stw > sw) ssize = Math.max(10, 20 * sw / stw);
+                        stw = sfont.widthOfTextAtSize(stxt, ssize);
+                        stargets.forEach(function (pi) {
+                            var pg = sdoc.getPage(pi); var sz = pg.getSize();
+                            var sx = spos.indexOf('left') >= 0 ? 36
+                                : (spos.indexOf('centre') >= 0 || spos.indexOf('center') >= 0) ? (sz.width - stw) / 2
+                                : sz.width - 36 - stw;
+                            var sy = spos.indexOf('top') === 0 ? sz.height - 50 : 36;
+                            pg.drawText(stxt, { x: sx, y: sy, size: ssize, font: sfont, color: PDFLib.rgb(0.1, 0.1, 0.4) });
+                        });
+                    } else { throw new Error('Upload a signature image or type your name first.'); }
+                    var sbytes2 = await sdoc.save();
+                    qmSetAsync(key, { ok: true, b64: qmBytesToB64(sbytes2), pages: stotal, signed: stargets.length });
                 } else if (op === 'pdfMeta') {
                     var mdoc = await PDFDocument.load(qmB64ToBytes(args.pdf), { ignoreEncryption: true });
                     var mkw = [];

@@ -781,6 +781,7 @@ fun pdfCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Rotate PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0891B2), desc = "Rotate PDF pages the right way") { it.openPdf("Rotate PDF") },
         ToolCardDef("Watermark PDF", "", "PDF Tools", IconKind.Star, Color(0xFF9333EA), desc = "Add a text watermark to pages") { it.openPdf("Watermark") },
         ToolCardDef("Page Numbers", "", "PDF Tools", IconKind.FileText, Color(0xFF2563EB), desc = "Add page numbers to your PDF") { it.openPdf("Page Numbers") },
+        ToolCardDef("Sign PDF", "", "PDF Tools", IconKind.Edit, Color(0xFFD97706), desc = "Sign a PDF with your signature") { it.openPdf("Sign PDF") },
         ToolCardDef("N-Up Print", "", "PDF Tools", IconKind.Grid, Color(0xFF059669), desc = "Fit 2 or 4 pages on one A4 sheet — save paper") { it.openPdf("N-Up Print") },
         ToolCardDef("Organize PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0D9488), desc = "Reorder or delete pages in a PDF") { it.openPdf("Organize PDF") },
         ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B), desc = "View and edit PDF details") { it.openPdf("PDF Metadata") }
@@ -1397,11 +1398,17 @@ fun PdfConverterScreen(state: AppState) {
     var metaCreator by remember { mutableStateOf("") }
     var metaProducer by remember { mutableStateOf("") }
     var metaLoaded by remember { mutableStateOf(false) }
+    // Sign PDF tool state
+    var signFiles by remember { mutableStateOf<List<WebFile>>(emptyList()) }
+    var signName by remember { mutableStateOf("") }
+    var signPages by remember { mutableStateOf("last") }
+    var signPosition by remember { mutableStateOf("bottom-right") }
+    var signWidth by remember { mutableStateOf(150) }
 
     LaunchedEffect(state.pdfTool) {
         if (state.pdfTool == "Compress PDF") {
             state.navigate(Screen.CompressPdf)
-        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print", "Organize PDF")) {
+        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print", "Organize PDF", "Sign PDF")) {
             selectedTool = state.pdfTool
         } else {
             selectedTool = "Merge PDF"
@@ -1409,6 +1416,7 @@ fun PdfConverterScreen(state: AppState) {
     }
     LaunchedEffect(selectedTool) {
         files = emptyList()
+        signFiles = emptyList()
         resultB64 = null; pageImages = emptyList(); pageCount = null
         statusText = null; errorText = null
         orgOrder = emptyList()
@@ -1489,6 +1497,7 @@ fun PdfConverterScreen(state: AppState) {
                     Triple("Page Numbers", IconKind.FileText, Color(0xFF2563EB)),
                     Triple("N-Up Print", IconKind.Grid, Color(0xFF059669)),
                     Triple("Organize PDF", IconKind.Swap, Color(0xFF0D9488)),
+                    Triple("Sign PDF", IconKind.Edit, Color(0xFFD97706)),
                     Triple("PDF Metadata", IconKind.Info, Color(0xFF64748B))
                 ).forEach { (name, icon, color) ->
                     Column(
@@ -1723,6 +1732,85 @@ fun PdfConverterScreen(state: AppState) {
                                 }
                             }
                         }
+                        "Sign PDF" -> {
+                            Text("Your signature is stamped onto the PDF — the file never leaves your browser.",
+                                fontSize = 12.sp, color = MutedText)
+                            // Signature image via the file PICKER (not a second
+                            // drop zone: two FileDropCollectors share one drop
+                            // queue, so a dropped PNG could be swallowed by
+                            // the PDF zone before this zone ever saw it).
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedButton(
+                                    onClick = {
+                                        launchPick(scope, IMAGE_SPEC, false, current = { signFiles }) { incoming, err ->
+                                            if (err != null) { errorText = err; return@launchPick }
+                                            signFiles = incoming.take(1)
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) { Text(if (signFiles.isEmpty()) "Upload Signature Image" else "Change Signature Image", fontSize = 12.5.sp) }
+                                if (signFiles.isNotEmpty()) {
+                                    Text(signFiles.first().name, fontSize = 12.5.sp, color = NavyText, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = { signFiles = emptyList() }) { Text("✕", fontSize = 14.sp) }
+                                }
+                            }
+                            Text("A transparent PNG from Signature Maker works best.",
+                                fontSize = 12.sp, color = MutedText)
+                            OutlinedTextField(
+                                value = signName,
+                                onValueChange = { signName = it },
+                                label = { Text("Or type your name to sign") },
+                                singleLine = true, shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text("If both are given, the signature image is used.",
+                                fontSize = 12.sp, color = MutedText)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Sign on:", fontSize = 13.sp, color = NavyText)
+                                listOf("last" to "Last page", "first" to "First page", "all" to "Every page").forEach { (v, label) ->
+                                    FilterChip(
+                                        selected = signPages == v,
+                                        onClick = { signPages = v },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Position:", fontSize = 13.sp, color = NavyText)
+                                listOf(
+                                    "bottom-right" to "Bottom Right", "bottom-left" to "Bottom Left",
+                                    "bottom-centre" to "Bottom Centre"
+                                ).forEach { (pos, label) ->
+                                    FilterChip(
+                                        selected = signPosition == pos,
+                                        onClick = { signPosition = pos },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Size:", fontSize = 13.sp, color = NavyText)
+                                listOf(110 to "Small", 150 to "Medium", 200 to "Large").forEach { (w, label) ->
+                                    FilterChip(
+                                        selected = signWidth == w,
+                                        onClick = { signWidth = w },
+                                        label = { Text(label, fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = PurplePrimary, selectedLabelColor = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                        }
                     }
                     PrimaryToolButton(
                         when (selectedTool) {
@@ -1735,10 +1823,12 @@ fun PdfConverterScreen(state: AppState) {
                             "Page Numbers" -> "Add Page Numbers"
                             "N-Up Print" -> "Make N-Up PDF"
                             "Organize PDF" -> "Save Organized PDF"
+                            "Sign PDF" -> "Sign PDF"
                             "PDF Metadata" -> "Save Metadata"
                             else -> "Process"
                         },
-                        enabled = files.isNotEmpty() && (selectedTool != "Merge PDF" || files.size >= 2),
+                        enabled = files.isNotEmpty() && (selectedTool != "Merge PDF" || files.size >= 2)
+                            && (selectedTool != "Sign PDF" || signFiles.isNotEmpty() || signName.isNotBlank()),
                         busy = busy
                     ) {
                         resultB64 = null; pageImages = emptyList()
@@ -1848,6 +1938,26 @@ fun PdfConverterScreen(state: AppState) {
                                     resultName = "organized.pdf"
                                     statusText = "Saved ${res.asyncStr("pages")} page(s) in your new order."
                                     recordHistory("Organize PDF", "Pages organized", order.joinToString(","))
+                                }
+                            }
+                            "Sign PDF" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                val sigB64 = signFiles.firstOrNull()?.let { loadFileBase64(it.id) }
+                                if (sigB64 == null && signName.isBlank()) {
+                                    errorText = "Upload a signature image or type your name first."
+                                    return@launch
+                                }
+                                val args = buildString {
+                                    append("{\"pdf\":\"$b64\",")
+                                    if (sigB64 != null) append("\"sig\":\"$sigB64\",")
+                                    append("\"name\":\"${pdfJsonEsc(signName)}\",\"pages\":\"$signPages\",\"position\":\"$signPosition\",\"width\":$signWidth}")
+                                }
+                                runOp("signPdf", args) { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "signed.pdf"
+                                    statusText = "Signed ${res.asyncStr("signed")} page(s) — download the signed PDF."
+                                    recordHistory("Sign PDF", "PDF signed", "$signPages, $signPosition")
                                 }
                             }
                             "PDF to Images" -> scope.launch {
