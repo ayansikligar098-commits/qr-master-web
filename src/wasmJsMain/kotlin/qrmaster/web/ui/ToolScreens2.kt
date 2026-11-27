@@ -99,7 +99,7 @@ fun ImageToolsScreen(state: AppState) {
                 resultName = f.name.substringBeforeLast(".") + "." + ext
                 resultMime = mime
                 val approxBytes = (resultUrl!!.length * 3) / 4
-                resultInfo = "New size ≈ ${formatBytes(approxBytes.toLong())} (was ${formatBytes(f.size)})"
+                resultInfo = "$label ✓ • New size ≈ ${formatBytes(approxBytes.toLong())} (was ${formatBytes(f.size)})"
                 recordHistory("Image Tools", label, f.name)
             } else {
                 state.toast(res?.asyncError() ?: "Conversion failed")
