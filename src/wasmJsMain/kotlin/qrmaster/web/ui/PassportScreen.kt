@@ -534,6 +534,11 @@ private suspend fun processPhoto(m: PpModel, f: WebFile, state: AppState) {
     }
     if (m.bgFailed) {
         notes.add("Background removal could not run on this photo, so its original background is kept. Cropping and sizes still work.")
+    } else {
+        // Done-signal: until now a successful cut-out showed no message at
+        // all, so users could not tell whether background removal had
+        // finished (the preview alone is the only clue). State it plainly.
+        notes.add(0, "Background removed ✓ Your photo is ready — pick a background colour below, or download the sheet.")
     }
     m.note = if (notes.isEmpty()) null else notes.joinToString(" ")
     m.stage = PPStage.Maker
