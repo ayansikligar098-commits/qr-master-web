@@ -530,7 +530,7 @@ fun LogoMark(size: androidx.compose.ui.unit.Dp) {
             BrandLogo.started = true
             scope.launch {
                 try {
-                    val dataUrl = fetchResourceDataUrl("logo-mark.png")
+                    val dataUrl = fetchResourceDataUrl("/logo-mark.png")
                     if (dataUrl != null) BrandLogo.bitmap = decodeBitmapFromDataUrl(dataUrl)
                 } catch (e: Exception) { }
             }
