@@ -2082,9 +2082,10 @@ fun PdfConverterScreen(state: AppState) {
 
 /* ---------------- 5) Spin & Earn (Android app wheel, real engine) ---------------- */
 
-// Hisso ke naam — index 6 (coin) ka chehra label se NAHI banta:
-// wahan drawGoldCoin + number banta hai (neeche wheel drawing dekho).
-val SpinSegmentLabels = listOf("₹1", "₹2", "₹5", "₹10", "₹15", "₹20", "Coins", "JACKPOT")
+// Hisso ke naam — index 6 (coin) aur index 7 (BLNT) ke chehre
+// label se NAHI bante: coin par drawGoldCoin + number, BLNT par
+// do-pankti "Better Luck / Next Time" banta hai (neeche dekho).
+val SpinSegmentLabels = listOf("₹1", "₹2", "₹5", "₹10", "₹15", "₹20", "Coins", "Better Luck Next Time")
 
 /**
  * Sona sikka — PROPER coin logo (Ayan 2026-11-28: "coin ka proper
@@ -2267,8 +2268,15 @@ fun SpinScreen(state: AppState) {
                             // Ad spin ka BLNT faisla server karta hai:
                             // kabhi asal BLNT, kabhi coin (lagatar BLNT
                             // kabhi nahi, roz BLNT hadd 3 — Worker me).
+                            // Purana JACKPOT natija (blntJackpot) bhi
+                            // yahi aata hai — uska bhi yahi faisla.
                             val ar = CoinsApi.adSpinResult(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
                             if (ar.ok && ar.str("outcome") == "coins") ar.lng("grantedCoins") else 0L
+                        } else if (r.blntJackpot) {
+                            // Asal BLNT (purana JACKPOT khana): coin
+                            // NAHI — coinprize bulaya hi nahi jata,
+                            // pahiya BLNT hisse par rukega.
+                            0L
                         } else {
                             // Free spin ka BLNT = coin inaam, SIRF
                             // server se. Fail (cap/verify) ho to
@@ -2278,7 +2286,11 @@ fun SpinScreen(state: AppState) {
                         }
                         if (coinWinAmount > 0) coinFaceAmount = coinWinAmount
                     }
-                    val segIndex = qrmaster.web.data.SegmentPicker.indexOf(r.segment)
+                    // Ad spin par purana-JACKPOT natija coin me badle
+                    // to pahiya coin hisse par rukega (chehre par
+                    // rakam ke saath); BLNT rahe to BLNT hisse par.
+                    val segId = if (r.blntJackpot && coinWinAmount > 0) "0" else r.segment
+                    val segIndex = qrmaster.web.data.SegmentPicker.indexOf(segId)
                     val current = rotation.value
                     val segCenter = segIndex * 45f + 22.5f
                     val targetMod = (360f - segCenter) % 360f
@@ -2299,7 +2311,6 @@ fun SpinScreen(state: AppState) {
                             "You won $coinWinAmount Coins!"
                         }
                         r.prizePaise <= 0L -> "Better Luck Next Time!"
-                        r.jackpot -> "🎉 JACKPOT! You won ₹1"
                         else -> "🎉 You won ₹${qrmaster.web.data.rupeesStr(r.prizePaise)}"
                     }
                     reloadSnapshot()
@@ -2433,7 +2444,38 @@ fun SpinScreen(state: AppState) {
                                     withTransform({
                                         rotate(i * 45f + 22.5f + rotation.value, Offset(cx, cy))
                                     }) {
-                                        if (i == 6) {
+                                        if (i == 7) {
+                                            // BLNT hissa (purana JACKPOT,
+                                            // Ayan 2026-11-28): "Better Luck
+                                            // Next Time" DO panktio me —
+                                            // "Better Luck" upar, "Next
+                                            // Time" neeche — taaki ghate
+                                            // (wedge) me saaf padha jaye.
+                                            // Dono panktiyaan ghumti hui
+                                            // frame ke andar hi banti
+                                            // hain, baaki label ki tarah.
+                                            val blntStyle = TextStyle(
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            val blntL1 = textMeasurer.measure("Better Luck", blntStyle)
+                                            val blntL2 = textMeasurer.measure("Next Time", blntStyle)
+                                            drawText(
+                                                blntL1,
+                                                topLeft = Offset(
+                                                    cx - blntL1.size.width / 2f,
+                                                    cy - radius * 0.905f
+                                                )
+                                            )
+                                            drawText(
+                                                blntL2,
+                                                topLeft = Offset(
+                                                    cx - blntL2.size.width / 2f,
+                                                    cy - radius * 0.745f
+                                                )
+                                            )
+                                        } else if (i == 6) {
                                             // Coin hissa: PROPER sunehra
                                             // sikka + uske neeche NUMBER —
                                             // ₹ hisso ki tarah (nishan +

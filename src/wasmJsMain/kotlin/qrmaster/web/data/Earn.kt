@@ -545,7 +545,12 @@ object SpinLogic {
 
     fun segmentFor(cfg: Config, balanceBeforePaise: Long, prizePaise: Long): String {
         if (prizePaise <= 0) return "0"
-        if (isJackpot(cfg, balanceBeforePaise, prizePaise)) return "J"
+        // SIRF WEBSITE (Ayan 2026-11-28): pahiye par JACKPOT hissa
+        // khatm — uski jagah asal "Better Luck Next Time" (id "B").
+        // Engine ka jackpot natija spin() me 0 ho jata hai; yahan
+        // "B" sirf us durlabh pehle-spin mamle ke liye hai jahan
+        // raksha ke kaaran ₹1 banta rehta hai (neeche spin() dekho).
+        if (isJackpot(cfg, balanceBeforePaise, prizePaise)) return "B"
         if (prizePaise == PRIZE10) return "10"
         if (prizePaise == PRIZE15) return "15"
         if (prizePaise == PRIZE20) return "20"
@@ -556,7 +561,7 @@ object SpinLogic {
 }
 
 object SegmentPicker {
-    val SEGMENTS: List<String> = listOf("1", "2", "5", "10", "15", "20", "0", "J")
+    val SEGMENTS: List<String> = listOf("1", "2", "5", "10", "15", "20", "0", "B")
     fun pickSegment(cfg: SpinLogic.Config, balanceBeforePaise: Long, prizePaise: Long): String =
         SpinLogic.segmentFor(cfg, balanceBeforePaise, prizePaise)
     fun indexOf(segmentId: String): Int = SEGMENTS.indexOf(segmentId).let { if (it < 0) 6 else it }
@@ -1019,7 +1024,12 @@ object EarnApi {
         data class Ok(
             val prizePaise: Long,
             val segment: String,
-            val jackpot: Boolean,
+            // Engine ka JACKPOT natija web par asal BLNT me badla
+            // gaya hai kya (Ayan 2026-11-28) — true ho to prizePaise
+            // hamesha 0 aur segment "B"; coin inaam is par NAHI
+            // banta (free spin me coinprize bulaya hi nahi jata,
+            // ad spin me faisla adspin-result karta hai).
+            val blntJackpot: Boolean,
             val directBig: Boolean,
             val walletAfterPaise: Long,
             val dailyLeftAfter: Int,
@@ -1068,10 +1078,24 @@ object EarnApi {
         val useGift = dailyLeft <= 0
         if (useGift && giftLeft <= 0) return SpinOutcome.Rejected("NO_SPINS", "No spins left today")
 
-        val prize = SpinLogic.decidePrize(
+        val rawPrize = SpinLogic.decidePrize(
             c, user.walletPaise, !user.spinFirstDone, Random.nextInt(10000),
             if (adEarned) -1 else Random.nextInt(10000)
         )
+        // SIRF WEBSITE (Ayan ka order 2026-11-28): JACKPOT khatm —
+        // engine ka jackpot natija (Band D me jackpotPct, Band G me
+        // gJackpotPct se aaya prize1) web par asal "Better Luck Next
+        // Time" hai: commit se PEHLE 0, isliye na wallet badhta hai,
+        // na fund se ₹ nikalta hai, na spinWin banta hai — aur UI is
+        // spin par coinprize NAHI bulati (ad spin par faisla
+        // adspin-result ka rehta hai). Pehle spin ki "kabhi khaali
+        // nahi" raksha ke liye pehla spin is badlav se bahar hai
+        // (us durlabh mamle me ₹1 banta rehta hai). Android app ke
+        // engine me ye badlav NAHI hai — ye sirf is web spin()
+        // pravah ki parat hai; band/settings ke moolya vaise hi.
+        val blntJackpot = user.spinFirstDone &&
+            SpinLogic.isJackpot(c, user.walletPaise, rawPrize)
+        val prize = if (blntJackpot) 0L else rawPrize
         val walletAfter = user.walletPaise + prize
 
         val fields = HashMap<String, JsonObject>()
@@ -1114,8 +1138,9 @@ object EarnApi {
         if (err != null) return SpinOutcome.Rejected("NETWORK", err)
         return SpinOutcome.Ok(
             prizePaise = prize,
-            segment = SegmentPicker.pickSegment(c, user.walletPaise, prize),
-            jackpot = SpinLogic.isJackpot(c, user.walletPaise, prize),
+            segment = if (blntJackpot) "B"
+                else SegmentPicker.pickSegment(c, user.walletPaise, prize),
+            blntJackpot = blntJackpot,
             directBig = SpinLogic.isDirectBig(user.walletPaise, prize),
             walletAfterPaise = walletAfter,
             dailyLeftAfter = if (useGift) dailyLeft else dailyLeft - 1,
