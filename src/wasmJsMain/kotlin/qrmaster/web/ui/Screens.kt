@@ -238,6 +238,8 @@ fun ScreenContent(state: AppState) {
         Screen.Notifications -> NotificationsScreen(state)
         Screen.Support -> SupportScreen(state)
         Screen.About -> AboutScreen(state)
+        Screen.FileShare -> FileShareScreen(state)
+        Screen.ShareDownload -> ShareDownloadScreen(state)
     }
 }
 
@@ -343,6 +345,7 @@ fun homeTools(): List<ToolCardDef> = listOf(
     ToolCardDef("Compress PDF", "PDF Tools", "PDF", IconKind.Compress, Color(0xFFEA580C)) { it.navigate(Screen.CompressPdf) },
     ToolCardDef("Remove BG", "Photo Tools", "Productivity", IconKind.Star, Color(0xFF7C3AED)) { it.navigate(Screen.RemoveBg) },
     ToolCardDef("Passport Photo", "Photo Tools", "Productivity", IconKind.Users, Color(0xFF0284C7)) { it.navigate(Screen.PassportPhoto) },
+    ToolCardDef("File Share", "File Tools", "Productivity", IconKind.Upload, Color(0xFF6D28D9)) { it.navigate(Screen.FileShare) },
     ToolCardDef("Resize Image", "Photo Tools", "Productivity", IconKind.Edit, Color(0xFF0D9488)) { it.navigate(Screen.ResizeImage) },
     ToolCardDef("Age Calculator", "Calculators", "Calculators", IconKind.Calendar, Color(0xFFDB2777)) { it.navigate(Screen.AgeCalc) },
     ToolCardDef("BMI Calculator", "Calculators & Converters", "Calculators", IconKind.Calc, Color(0xFF0284C7)) { it.navigate(Screen.BmiCalc) },
@@ -823,6 +826,9 @@ fun converterCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Currency Converter", "", "Converters", IconKind.Wallet, Color(0xFFCA8A04), desc = "Convert one currency to another") { it.navigate(Screen.CurrencyConvert) },
         ToolCardDef("Percentage Calculator", "", "Converters", IconKind.Percent, Color(0xFFC026D3), desc = "Calculate percentages in one tap") { it.navigate(Screen.PercentCalc) }
     )
+fun fileCatalog(): List<ToolCardDef> = listOf(
+        ToolCardDef("File Share", "", "More", IconKind.Upload, Color(0xFF6D28D9), desc = "Send any file up to 5 GB free (10 GB Premium) with a link + QR") { it.navigate(Screen.FileShare) }
+    )
 fun earnCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Tasks & Earn", "", "More", IconKind.Task, Color(0xFFD97706), desc = "Complete tasks and earn rewards") { it.navigate(Screen.Tasks) },
         ToolCardDef("Spin & Earn", "", "More", IconKind.Spin, Color(0xFF7C3AED), desc = "Spin the wheel and win daily") { it.navigate(Screen.Spin) },
@@ -852,11 +858,13 @@ fun AllToolsScreen(state: AppState) {
     val imageTools = imageCatalog()
     val converters = converterCatalog()
     val earnTools = earnCatalog()
+    val fileTools = fileCatalog()
     val sections = listOf(
         SectionDef("QR & Barcode Tools", "QR Tools", qrTools),
         SectionDef("PDF Tools", "PDF Tools", pdfTools),
         SectionDef("Image Tools", "Image Tools", imageTools),
         SectionDef("Converters & Calculators", "Converters", converters),
+        SectionDef("File Tools", "More", fileTools),
         SectionDef("Earn & Rewards", "More", earnTools)
     )
     val anyVisible = sections

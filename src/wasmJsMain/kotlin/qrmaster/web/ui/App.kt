@@ -71,7 +71,8 @@ enum class Screen {
     Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage, PdfEditor, PassportPhoto,
     CompressKb, SignatureMaker, CropRotate, JoinPhotos, PhotoEditor, PhotoWatermark,
     AgeCalc, BmiCalc, UnitConvert, CurrencyConvert, PercentCalc,
-    Bonus, Invite, History, Notifications, Support, About
+    Bonus, Invite, History, Notifications, Support, About,
+    FileShare, ShareDownload
 }
 
 data class QrPreset(val typeLabel: String, val fieldLabel: String, val initialContent: String)
@@ -97,6 +98,8 @@ class AppState {
     var navEpoch: Int = 0
         private set
     var placeholderTitle by mutableStateOf("")
+    /** Share id for the public /s/<id> download route (case-sensitive). */
+    var shareId by mutableStateOf("")
     var user by mutableStateOf<WebUser?>(FirebaseApi.session)
     var profile by mutableStateOf<Profile?>(null)
     var profileLoading by mutableStateOf(false)
@@ -144,6 +147,11 @@ class AppState {
     fun openPlaceholder(title: String) {
         placeholderTitle = title
         screen = Screen.Placeholder
+    }
+
+    fun openShareDownload(id: String) {
+        shareId = id
+        screen = Screen.ShareDownload
     }
 
     fun openQr(preset: QrPreset?) {
@@ -254,9 +262,18 @@ private fun slugOf(state: AppState): String = when (state.screen) {
     Screen.Settings -> "settings"
     Screen.Login -> "login"
     Screen.Placeholder -> ""
+    Screen.FileShare -> "file-share"
+    Screen.ShareDownload -> if (state.shareId.isNotBlank()) "s/${state.shareId}" else ""
 }
 
 private fun applySlug(state: AppState, rawHash: String): Boolean {
+    // Public share links /s/<id>: share ids are case-sensitive, so this
+    // route is matched BEFORE the slug is lowercased below.
+    val segs = rawHash.removePrefix("#").trim().trim('/').split('/')
+    if (segs.size == 2 && segs[0].equals("s", ignoreCase = true) && segs[1].isNotBlank()) {
+        state.openShareDownload(segs[1])
+        return true
+    }
     val slug = rawHash.removePrefix("#").removePrefix("/").trim().trim('/').lowercase()
     when (slug) {
         "", "home" -> state.navigate(Screen.Dashboard)
@@ -315,6 +332,7 @@ private fun applySlug(state: AppState, rawHash: String): Boolean {
         "about" -> state.navigate(Screen.About)
         "settings" -> state.navigate(Screen.Settings)
         "login" -> state.navigate(Screen.Login)
+        "file-share" -> state.navigate(Screen.FileShare)
         else -> return false
     }
     return true
@@ -374,7 +392,7 @@ fun App() {
     LaunchedEffect(Unit) {
         try { applySlug(state, window.location.pathname) } catch (e: Exception) { }
     }
-    LaunchedEffect(state.screen, state.pdfTool, state.qrPreset) {
+    LaunchedEffect(state.screen, state.pdfTool, state.qrPreset, state.shareId) {
         try {
             val slug = slugOf(state)
             val want = if (slug.isEmpty()) "/" else "/$slug"
@@ -683,6 +701,7 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
         if (state.coinEnabled != false) {
             NavItem(state, Screen.Coins, IconKind.Star, "Coins", onNavigate)
         }
+        NavItem(state, Screen.FileShare, IconKind.Upload, "File Share", onNavigate, badge = "New")
         NavItem(state, Screen.Bonus, IconKind.Gift, "Bonus Code", onNavigate)
         NavItem(state, Screen.Invite, IconKind.Users, "Invite & Earn", onNavigate)
         NavItem(state, Screen.Premium, IconKind.Crown, "Premium", onNavigate, crownGold = true)

@@ -2468,6 +2468,413 @@
             }
         })();
     };
+
+    /* ================= Kitnook File Share engine =================
+       Multipart upload straight from this browser to Cloudflare R2,
+       using presigned URLs from the kitnook-share-api Worker (the
+       Worker never sees file bytes). Ported from the Phase-1 proof
+       pages, which passed a 1 GiB end-to-end SHA-256 test. The Kotlin
+       UI drives it through the window.__qmFs* bridges and polls a JSON
+       status object. Sessions persist in localStorage (keyed by file
+       fingerprint) so an interrupted upload can resume after reload. */
+    (function () {
+        var API = 'https://kitnook-share-api.ayansikligar98.workers.dev';
+        var CONC = 6, MAXA = 4;
+        var F = {
+            files: {}, seq: 0, pick: null, dropped: null,
+            dragDepth: 0, dropOn: false, up: null,
+            status: { state: 'idle' }
+        };
+        window.__qmFs = F;
+
+        function lsKey(f) { return 'kitnook_fs_' + [f.name, f.size, f.lastModified].join('|'); }
+        function saveState() {
+            var S = F.up; if (!S || !S.file) return;
+            try {
+                localStorage.setItem(lsKey(S.file), JSON.stringify({
+                    shareId: S.shareId, uploadId: S.uploadId, partSize: S.partSize,
+                    partCount: S.partCount, etags: S.etags, deleteToken: S.deleteToken,
+                    expiresAt: S.expiresAt
+                }));
+            } catch (e) { }
+        }
+        function loadState(f) {
+            try { return JSON.parse(localStorage.getItem(lsKey(f))); } catch (e) { return null; }
+        }
+        function clearState(f) { try { localStorage.removeItem(lsKey(f)); } catch (e) { } }
+        function saveToken(shareId, token) {
+            try {
+                var map = JSON.parse(localStorage.getItem('kitnook_fs_tokens') || '{}');
+                map[shareId] = token;
+                var keys = Object.keys(map);
+                while (keys.length > 50) { delete map[keys.shift()]; }
+                localStorage.setItem('kitnook_fs_tokens', JSON.stringify(map));
+            } catch (e) { }
+        }
+        function forgetToken(shareId) {
+            try {
+                var map = JSON.parse(localStorage.getItem('kitnook_fs_tokens') || '{}');
+                delete map[shareId];
+                localStorage.setItem('kitnook_fs_tokens', JSON.stringify(map));
+            } catch (e) { }
+        }
+        F.forgetToken = forgetToken;
+
+        function api(path, opts, token) {
+            opts = opts || {};
+            var headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            if (opts.headers) { for (var k in opts.headers) headers[k] = opts.headers[k]; }
+            opts.headers = headers;
+            return fetch(API + path, opts).then(function (r) {
+                return r.json().catch(function () { return {}; }).then(function (data) {
+                    if (!r.ok) {
+                        var err = new Error(data.error || ('HTTP ' + r.status));
+                        err.data = data; err.status = r.status;
+                        throw err;
+                    }
+                    return data;
+                });
+            });
+        }
+
+        /* ---------- picking ---------- */
+        window.__qmFsPick = function () {
+            F.seq += 1;
+            var id = F.seq;
+            F.pick = { id: id, done: false };
+            var input = document.createElement('input');
+            input.type = 'file';
+            input.onchange = function () {
+                var f = input.files && input.files[0];
+                if (!f) { F.pick = { id: id, done: true, cancelled: true }; return; }
+                F.seq += 1;
+                var ref = F.seq;
+                F.files[ref] = f;
+                F.pick = { id: id, done: true, ref: ref, name: f.name, size: f.size, type: f.type || '', lastModified: f.lastModified };
+                input.remove();
+            };
+            document.body.appendChild(input);
+            input.click();
+            setTimeout(function () { try { input.remove(); } catch (e) { } }, 60000);
+            return id;
+        };
+        window.__qmFsPollPick = function (id) {
+            var p = F.pick;
+            if (!p || p.id !== id || !p.done) return '';
+            if (p.cancelled) return 'CANCELLED';
+            return JSON.stringify({ ref: p.ref, name: p.name, size: p.size, type: p.type, lastModified: p.lastModified });
+        };
+
+        /* ---------- drag & drop (document-level while the screen is open) ---------- */
+        function onDragOver(e) { if (!F.dropOn) return; e.preventDefault(); F.dragDepth = 1; }
+        function onDragLeave(e) { if (!F.dropOn) return; F.dragDepth = 0; }
+        function onDrop(e) {
+            if (!F.dropOn) return;
+            e.preventDefault();
+            F.dragDepth = 0;
+            var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (!f) return;
+            F.seq += 1;
+            var ref = F.seq;
+            F.files[ref] = f;
+            F.dropped = { ref: ref, name: f.name, size: f.size, type: f.type || '', lastModified: f.lastModified };
+        }
+        window.__qmFsDrop = function (on) {
+            if (on && !F.dropOn) {
+                document.addEventListener('dragover', onDragOver);
+                document.addEventListener('dragleave', onDragLeave);
+                document.addEventListener('drop', onDrop);
+            } else if (!on && F.dropOn) {
+                document.removeEventListener('dragover', onDragOver);
+                document.removeEventListener('dragleave', onDragLeave);
+                document.removeEventListener('drop', onDrop);
+                F.dragDepth = 0;
+            }
+            F.dropOn = !!on;
+        };
+        window.__qmFsPollDrop = function () {
+            if (!F.dropped) return '';
+            var d = F.dropped; F.dropped = null;
+            return JSON.stringify(d);
+        };
+        window.__qmFsDragging = function () { return F.dragDepth > 0; };
+
+        /* ---------- resumable sessions ---------- */
+        window.__qmFsResumable = function (ref) {
+            var f = F.files[ref];
+            if (!f) return JSON.stringify({ found: false });
+            var s = loadState(f);
+            if (!s || !s.shareId) return JSON.stringify({ found: false });
+            var done = Object.keys(s.etags || {}).length;
+            if (done >= s.partCount) return JSON.stringify({ found: false });
+            return JSON.stringify({ found: true, partsDone: done, partCount: s.partCount });
+        };
+        window.__qmFsForget = function (ref, token) {
+            var f = F.files[ref];
+            if (!f) return;
+            var s = loadState(f);
+            clearState(f);
+            if (s && s.shareId && s.deleteToken) {
+                api('/api/shares/' + s.shareId + '/abort', {
+                    method: 'POST', body: JSON.stringify({ deleteToken: s.deleteToken })
+                }, token).catch(function () { });
+                forgetToken(s.shareId);
+            }
+        };
+        window.__qmFsSavedToken = function (shareId) {
+            try {
+                var map = JSON.parse(localStorage.getItem('kitnook_fs_tokens') || '{}');
+                return map[shareId] || '';
+            } catch (e) { return ''; }
+        };
+
+        /* ---------- upload engine ---------- */
+        function partBytes(S, n) {
+            var start = (n - 1) * S.partSize;
+            return Math.min(S.partSize, S.file.size - start);
+        }
+        function setStatus(patch) {
+            for (var k in patch) F.status[k] = patch[k];
+        }
+        function tick() {
+            var S = F.up;
+            if (!S) return;
+            var inflight = 0;
+            S.loaded.forEach(function (v) { inflight += v; });
+            var total = S.doneBytes + inflight;
+            var now = performance.now();
+            S.samples.push({ t: now, b: total });
+            while (S.samples.length > 2 && now - S.samples[0].t > 5000) S.samples.shift();
+            var speed = 0;
+            if (S.samples.length > 1) {
+                var dt = (now - S.samples[0].t) / 1000;
+                if (dt > 0) speed = (total - S.samples[0].b) / dt;
+            }
+            setStatus({
+                uploaded: total,
+                total: S.file.size,
+                pct: S.file.size ? Math.min(100, total * 100 / S.file.size) : 0,
+                speed: speed,
+                eta: speed > 0 ? (S.file.size - total) / speed : -1,
+                partsDone: Object.keys(S.etags).length,
+                partsTotal: S.partCount
+            });
+            if (F.status.state === 'uploading' || F.status.state === 'paused' || F.status.state === 'finishing') {
+                setTimeout(tick, 250);
+            }
+        }
+        function presignBatch(S, nums, token) {
+            return api('/api/shares/' + S.shareId + '/parts', {
+                method: 'POST', body: JSON.stringify({ uploadId: S.uploadId, partNumbers: nums })
+            }, token).then(function (r) {
+                for (var n in r.urls) S.urls[n] = r.urls[n];
+            });
+        }
+        function presignAll(S, token) {
+            var missing = [];
+            for (var n = 1; n <= S.partCount; n++) if (!S.etags[n]) missing.push(n);
+            var chain = Promise.resolve();
+            for (var i = 0; i < missing.length; i += 100) {
+                (function (batch) {
+                    chain = chain.then(function () { return presignBatch(S, batch, token); });
+                })(missing.slice(i, i + 100));
+            }
+            return chain;
+        }
+        function uploadPart(S, n, token) {
+            return new Promise(function (resolve) {
+                var attempt = 0;
+                function tryOnce() {
+                    if (S.cancelled) { resolve(); return; }
+                    attempt += 1;
+                    var start = (n - 1) * S.partSize;
+                    var blob = S.file.slice(start, start + partBytes(S, n));
+                    var xhr = new XMLHttpRequest();
+                    S.inflight.set(n, xhr);
+                    xhr.open('PUT', S.urls[n]);
+                    xhr.upload.onprogress = function (e) { S.loaded.set(n, e.loaded); };
+                    xhr.onload = function () {
+                        S.inflight.delete(n); S.loaded.delete(n);
+                        var etag = xhr.getResponseHeader('ETag');
+                        if (xhr.status >= 200 && xhr.status < 300 && etag) {
+                            S.etags[n] = etag.replace(/"/g, '');
+                            S.doneBytes += partBytes(S, n);
+                            saveState();
+                            resolve();
+                        } else if (xhr.status === 403 && attempt < MAXA) {
+                            presignBatch(S, [n], token).catch(function () { }).then(function () {
+                                setTimeout(tryOnce, 500 * attempt);
+                            });
+                        } else if (attempt < MAXA) {
+                            setTimeout(tryOnce, 1000 * Math.pow(2, attempt - 1));
+                        } else {
+                            setStatus({ error: 'A part failed repeatedly. Check your connection, then Pause and Resume to retry.', state: 'paused' });
+                            S.paused = true;
+                            S.queue.unshift(n);
+                            resolve();
+                        }
+                    };
+                    xhr.onerror = function () {
+                        S.inflight.delete(n); S.loaded.delete(n);
+                        if (S.paused || S.cancelled) { resolve(); return; }
+                        if (attempt < MAXA) setTimeout(tryOnce, 1000 * Math.pow(2, attempt - 1));
+                        else { S.queue.unshift(n); resolve(); }
+                    };
+                    xhr.onabort = function () {
+                        S.inflight.delete(n); S.loaded.delete(n);
+                        resolve();
+                    };
+                    xhr.send(blob);
+                }
+                tryOnce();
+            });
+        }
+        function finish(S, token) {
+            if (S.finishing) return;
+            S.finishing = true;
+            setStatus({ state: 'finishing' });
+            var parts = Object.keys(S.etags).map(function (n) {
+                return { PartNumber: Number(n), ETag: S.etags[n] };
+            });
+            api('/api/shares/' + S.shareId + '/complete', {
+                method: 'POST', body: JSON.stringify({ uploadId: S.uploadId, parts: parts })
+            }, token).then(function () {
+                clearState(S.file);
+                saveToken(S.shareId, S.deleteToken);
+                setStatus({
+                    state: 'done', pct: 100, uploaded: S.file.size,
+                    shareId: S.shareId, deleteToken: S.deleteToken, expiresAt: S.expiresAt
+                });
+            }).catch(function (e) {
+                S.finishing = false;
+                setStatus({ state: 'paused', error: 'Finishing failed (' + e.message + '). Pause and Resume to retry.' });
+                S.paused = true;
+            });
+        }
+        function workerLoop(S, token) {
+            S.loops = (S.loops || 0) + 1;
+            (async function () {
+                try {
+                    while (!S.cancelled) {
+                        if (S.paused) { await new Promise(function (r) { setTimeout(r, 300); }); continue; }
+                        var n = S.queue.shift();
+                        if (n === undefined) {
+                            if (S.inflight.size === 0 && Object.keys(S.etags).length === S.partCount) finish(S, token);
+                            return;
+                        }
+                        await uploadPart(S, n, token);
+                    }
+                } finally {
+                    S.loops -= 1;
+                }
+            })();
+        }
+        function runWorkers(S, token) {
+            S.queue = [];
+            for (var n = 1; n <= S.partCount; n++) if (!S.etags[n]) S.queue.push(n);
+            // Loops that are parked in the pause-wait pick work up on
+            // their own; only top up when some have exited.
+            var alive = S.loops || 0;
+            for (var i = alive; i < CONC; i++) workerLoop(S, token);
+        }
+
+        window.__qmFsStart = function (ref, mode, token, expiryDays, password) {
+            var file = F.files[ref];
+            if (!file) { F.status = { state: 'error', error: 'file_lost' }; return; }
+            var S = {
+                file: file, etags: {}, paused: false, cancelled: false, finishing: false,
+                inflight: new Map(), loaded: new Map(), urls: {}, samples: [], doneBytes: 0, queue: []
+            };
+            F.up = S;
+            F.status = {
+                state: 'creating', uploaded: 0, total: file.size, pct: 0, speed: 0, eta: -1,
+                partsDone: 0, partsTotal: 0, fileName: file.name, error: ''
+            };
+            var begin = function (saved) {
+                if (saved) {
+                    S.shareId = saved.shareId; S.uploadId = saved.uploadId;
+                    S.partSize = saved.partSize; S.partCount = saved.partCount;
+                    S.etags = saved.etags || {};
+                    S.deleteToken = saved.deleteToken; S.expiresAt = saved.expiresAt;
+                    S.doneBytes = Object.keys(S.etags).reduce(function (sum, n) {
+                        return sum + partBytes(S, Number(n));
+                    }, 0);
+                    setStatus({ state: 'uploading', partsTotal: S.partCount, shareId: S.shareId });
+                    tick();
+                    return presignAll(S, token).then(function () { runWorkers(S, token); });
+                }
+                return api('/api/shares', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        fileName: file.name, size: file.size,
+                        contentType: file.type || 'application/octet-stream',
+                        expiryDays: expiryDays,
+                        password: password ? password : undefined
+                    })
+                }, token).then(function (created) {
+                    S.shareId = created.shareId; S.uploadId = created.uploadId;
+                    S.partSize = created.partSize; S.partCount = created.partCount;
+                    S.deleteToken = created.deleteToken; S.expiresAt = created.expiresAt;
+                    setStatus({
+                        state: 'uploading', partsTotal: S.partCount, shareId: S.shareId,
+                        tier: created.tier || '', maxBytes: created.maxBytes || 0
+                    });
+                    saveState();
+                    tick();
+                    return presignAll(S, token).then(function () { runWorkers(S, token); });
+                });
+            };
+            var saved = mode === 'resume' ? loadState(file) : null;
+            begin(saved).catch(function (e) {
+                if (S.cancelled) return;
+                setStatus({
+                    state: 'error',
+                    error: (e.data && e.data.error) || e.message || 'failed',
+                    maxBytes: (e.data && e.data.maxBytes) || 0,
+                    tier: (e.data && e.data.tier) || ''
+                });
+            });
+        };
+        window.__qmFsStatus = function () { return JSON.stringify(F.status); };
+        window.__qmFsPause = function () {
+            var S = F.up; if (!S) return;
+            S.paused = true;
+            setStatus({ state: 'paused' });
+            S.inflight.forEach(function (xhr, n) { S.queue.unshift(n); try { xhr.abort(); } catch (e) { } });
+            S.inflight.clear(); S.loaded.clear();
+        };
+        window.__qmFsResume = function () {
+            var S = F.up; if (!S) return;
+            if (F.status.state === 'done' || F.status.state === 'cancelled') return;
+            S.paused = false;
+            setStatus({ state: 'uploading', error: '' });
+            tick();
+            runWorkers(S, S.token || '');
+        };
+        window.__qmFsCancel = function (token) {
+            var S = F.up; if (!S) { F.status = { state: 'idle' }; return; }
+            S.cancelled = true;
+            S.inflight.forEach(function (xhr) { try { xhr.abort(); } catch (e) { } });
+            S.inflight.clear(); S.loaded.clear();
+            var shareId = S.shareId, deleteToken = S.deleteToken, file = S.file;
+            F.up = null;
+            F.status = { state: 'cancelled' };
+            if (shareId && deleteToken) {
+                api('/api/shares/' + shareId + '/abort', {
+                    method: 'POST', body: JSON.stringify({ deleteToken: deleteToken })
+                }, token).catch(function () { });
+                forgetToken(shareId);
+            }
+            if (file) clearState(file);
+        };
+        // remember the token for resume-after-pause (worker loops use it for re-presign)
+        var origStart = window.__qmFsStart;
+        window.__qmFsStart = function (ref, mode, token, expiryDays, password) {
+            origStart(ref, mode, token, expiryDays, password);
+            if (F.up) F.up.token = token;
+        };
+    })();
     </script>
     <script type="application/javascript" src="qrmaster.js"></script>
 </head>
