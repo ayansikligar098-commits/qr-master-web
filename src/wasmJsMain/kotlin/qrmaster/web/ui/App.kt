@@ -62,9 +62,11 @@ import qrmaster.web.data.RELEASES_PAGE_URL
 import qrmaster.web.data.WebUser
 import qrmaster.web.data.ensureReferralProfile
 import qrmaster.web.data.fetchAppRelease
+import qrmaster.web.data.loadCoinBalance
+import qrmaster.web.data.loadWebConfig
 
 enum class Screen {
-    Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Tasks,
+    Dashboard, AllTools, QrGenerator, PdfConverter, Spin, Wallet, Coins, Tasks,
     Settings, Premium, Login, Placeholder,
     Barcode, QrScan, ImageTools, Scanner, RemoveBg, ResizeImage, CompressPdf, CompressImage, PdfEditor, PassportPhoto,
     CompressKb, SignatureMaker, CropRotate, JoinPhotos, PhotoEditor, PhotoWatermark,
@@ -117,6 +119,24 @@ class AppState {
         if (appRelease != null || appReleaseFailed) return
         val r = fetchAppRelease()
         if (r != null) appRelease = r else appReleaseFailed = true
+    }
+
+    // Coin kill-switch (settings/config coinFeatureEnabled) — null =
+    // abhi load nahi hua; false ho to Coins ka pravesh hi chhupta hai.
+    var coinEnabled by mutableStateOf<Boolean?>(null)
+
+    suspend fun loadCoinEnabled() {
+        if (coinEnabled != null) return
+        coinEnabled = try { loadWebConfig(null).coins.enabled } catch (e: Exception) { true }
+    }
+
+    // Header coin chip ka balance (users/{uid}.coins — app ke saath
+    // EK hi balance). Login par aur har coin badlav ke baad refresh.
+    var coinBalance by mutableStateOf<Long?>(null)
+
+    suspend fun refreshCoinBalance() {
+        if (user == null) { coinBalance = null; return }
+        coinBalance = try { loadCoinBalance() } catch (e: Exception) { coinBalance }
     }
 
     fun navigate(s: Screen) { screen = s }
@@ -222,6 +242,7 @@ private fun slugOf(state: AppState): String = when (state.screen) {
     Screen.PercentCalc -> "percent-calculator"
     Screen.Spin -> "spin-earn"
     Screen.Wallet -> "wallet"
+    Screen.Coins -> "coins"
     Screen.Tasks -> "tasks"
     Screen.Bonus -> "bonus-code"
     Screen.Invite -> "invite-earn"
@@ -283,6 +304,7 @@ private fun applySlug(state: AppState, rawHash: String): Boolean {
         "percent-calculator" -> state.navigate(Screen.PercentCalc)
         "spin-earn" -> state.navigate(Screen.Spin)
         "wallet" -> state.navigate(Screen.Wallet)
+        "coins" -> state.navigate(Screen.Coins)
         "tasks" -> state.navigate(Screen.Tasks)
         "bonus-code" -> state.navigate(Screen.Bonus)
         "invite-earn" -> state.navigate(Screen.Invite)
@@ -331,8 +353,10 @@ fun App() {
         } catch (e: Exception) { }
         if (state.user != null) state.refreshProfile()
         state.loadAppRelease()
+        state.loadCoinEnabled()
     }
     LaunchedEffect(state.user) {
+        state.refreshCoinBalance()
         if (state.user != null) {
             // App-parity presence + referral-index maintenance (best effort).
             try { EarnApi.ensureReferralProfile() } catch (e: Exception) { }
@@ -444,6 +468,10 @@ fun MobileShell(state: AppState) {
                 Spacer(Modifier.width(8.dp))
                 Text("Kitnook", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = NavyText)
                 Spacer(Modifier.weight(1f))
+                if (state.user != null && state.coinEnabled != false) {
+                    CoinChip(state)
+                    Spacer(Modifier.width(8.dp))
+                }
                 AvatarButton(state)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -523,6 +551,31 @@ fun AvatarButton(state: AppState) {
     }
 }
 
+/**
+ * Header coin chip (Ayan 2026-11-28): upar wali safed patti me bell/
+ * avatar ke paas — sona sikka + balance; tap = Coins page. Sirf
+ * login par dikhta hai; kill-switch band ho to bilkul nahi.
+ */
+@Composable
+fun CoinChip(state: AppState) {
+    if (state.user == null || state.coinEnabled == false) return
+    Row(
+        Modifier.height(38.dp).clip(RoundedCornerShape(19.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), RoundedCornerShape(19.dp))
+            .clickable { state.navigate(Screen.Coins) }
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CoinBadge(18.dp)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            state.coinBalance?.toString() ?: "…",
+            fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = NavyText
+        )
+    }
+}
+
 @Composable
 fun TopBar(state: AppState) {
     var query by remember { mutableStateOf("") }
@@ -595,6 +648,10 @@ fun TopBar(state: AppState) {
                 )
             }
         }
+        if (state.user != null && state.coinEnabled != false) {
+            Spacer(Modifier.width(8.dp))
+            CoinChip(state)
+        }
         Spacer(Modifier.width(8.dp))
         AvatarButton(state)
     }
@@ -623,6 +680,9 @@ fun Sidebar(state: AppState, modifier: Modifier = Modifier, onNavigate: () -> Un
         NavItem(state, Screen.AllTools, IconKind.Grid, "All Tools", onNavigate)
         NavItem(state, Screen.Wallet, IconKind.Wallet, "Wallet", onNavigate)
         NavItem(state, Screen.Spin, IconKind.Spin, "Spin & Earn", onNavigate, badge = "New")
+        if (state.coinEnabled != false) {
+            NavItem(state, Screen.Coins, IconKind.Star, "Coins", onNavigate)
+        }
         NavItem(state, Screen.Bonus, IconKind.Gift, "Bonus Code", onNavigate)
         NavItem(state, Screen.Invite, IconKind.Users, "Invite & Earn", onNavigate)
         NavItem(state, Screen.Premium, IconKind.Crown, "Premium", onNavigate, crownGold = true)

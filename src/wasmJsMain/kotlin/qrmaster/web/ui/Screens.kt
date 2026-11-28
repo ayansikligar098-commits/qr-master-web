@@ -93,8 +93,14 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.launch
 import org.jetbrains.skia.Image as SkiaImage
+import qrmaster.web.data.CoinWebConfig
+import qrmaster.web.data.CoinsApi
+import qrmaster.web.data.bool
+import qrmaster.web.data.coinErrorMessage
 import qrmaster.web.data.EarnApi
 import qrmaster.web.data.FirebaseApi
+import qrmaster.web.data.lng
+import qrmaster.web.data.str
 import qrmaster.web.data.applyCoupon
 import qrmaster.web.data.applyTask
 import qrmaster.web.data.claimAutoTask
@@ -192,6 +198,7 @@ fun ScreenContent(state: AppState) {
         Screen.PdfConverter -> PdfConverterScreen(state)
         Screen.Spin -> SpinScreen(state)
         Screen.Wallet -> WalletScreen(state)
+        Screen.Coins -> CoinsScreen(state)
         Screen.Tasks -> TasksScreen(state)
         Screen.Settings -> SettingsScreen(state)
         Screen.Premium -> PremiumScreen(state)
@@ -812,6 +819,7 @@ fun converterCatalog(): List<ToolCardDef> = listOf(
 fun earnCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Tasks & Earn", "", "More", IconKind.Task, Color(0xFFD97706), desc = "Complete tasks and earn rewards") { it.navigate(Screen.Tasks) },
         ToolCardDef("Spin & Earn", "", "More", IconKind.Spin, Color(0xFF7C3AED), desc = "Spin the wheel and win daily") { it.navigate(Screen.Spin) },
+        ToolCardDef("Coins", "", "More", IconKind.Star, Color(0xFFF59E0B), desc = "Coin balance, history and gift-card redeem") { it.navigate(Screen.Coins) },
         ToolCardDef("Bonus Code", "", "More", IconKind.Gift, Color(0xFFDB2777), desc = "Redeem a bonus code for rewards") { it.navigate(Screen.Bonus) }
     )
 
@@ -2067,7 +2075,20 @@ fun PdfConverterScreen(state: AppState) {
 
 /* ---------------- 5) Spin & Earn (Android app wheel, real engine) ---------------- */
 
-val SpinSegmentLabels = listOf("₹1", "₹2", "₹5", "₹10", "₹15", "₹20", "BLNT", "JACKPOT")
+val SpinSegmentLabels = listOf("₹1", "₹2", "₹5", "₹10", "₹15", "₹20", "Coins", "JACKPOT")
+
+/** Sona sikka — pahiye ke Coins hisse, natije aur header chip par ek hi pehchan. */
+@Composable
+fun CoinBadge(size: androidx.compose.ui.unit.Dp = 18.dp) {
+    Canvas(Modifier.size(size)) {
+        val c = Offset(this.size.width / 2f, this.size.height / 2f)
+        val r = this.size.minDimension / 2f
+        drawCircle(Color(0xFFFFD54F), radius = r, center = c)
+        drawCircle(Color(0xFFD97706), radius = r - 0.75f, center = c, style = Stroke(width = 1.5f))
+        drawCircle(Color(0xFFD97706), radius = r * 0.55f, center = c, style = Stroke(width = 1.2f))
+        drawCircle(Color(0xFFD97706), radius = r * 0.14f, center = c)
+    }
+}
 val SpinSegmentColors = listOf(
     Color(0xFF8B5CF6), Color(0xFF2563EB), Color(0xFF059669), Color(0xFF4F46E5),
     Color(0xFFDB2777), Color(0xFF0D9488), Color(0xFF64748B), Color(0xFFF59E0B)
@@ -2091,6 +2112,164 @@ fun SpinScreen(state: AppState) {
     }
     LaunchedEffect(state.user) {
         if (state.user != null) reloadSnapshot()
+    }
+
+    // ── Coin pravah (2026-11-28): BLNT ki jagah coin + Watch-Ads-&-Spin ──
+    var adToken by remember { mutableStateOf<String?>(null) }
+    var adStepDone by remember { mutableStateOf(0) }
+    var adSecondsLeft by remember { mutableStateOf(0) }
+    var adBusy by remember { mutableStateOf(false) }
+    var adCapReached by remember { mutableStateOf(false) }
+    var resultCoinWin by remember { mutableStateOf(false) }
+
+    // Ek asal spin — Spin button aur ad-unlock ke baad ka auto-spin,
+    // dono yahi chalate hain (niyam ek hi: result pehle commit, phir
+    // animation; app parity).
+    fun startSpin(adEarned: Boolean = false) {
+        if (spinning) return
+        spinning = true
+        resultText = null
+        resultCoinWin = false
+        scope.launch {
+            when (val r = EarnApi.spin(adEarned)) {
+                is EarnApi.SpinOutcome.Ok -> {
+                    val coinCfg0 = snapshot?.cfg?.coins ?: CoinWebConfig()
+                    // Pehla spin poora — welcome coins ka daava Worker
+                    // se (server hi faisla karta hai: ek baar, device
+                    // lock ke saath). Animation ke saath-saath chalta
+                    // hai, use rokta nahi (app parity).
+                    if (r.wasFirstSpin && coinCfg0.enabled) {
+                        scope.launch {
+                            val w = CoinsApi.claimWelcome()
+                            if (w.ok && !w.bool("duplicate") && w.lng("grantedCoins") > 0) {
+                                state.toast("+${w.lng("grantedCoins")} Welcome Coins added! See the Coins page.")
+                                state.refreshCoinBalance()
+                            }
+                        }
+                    }
+                    val segIndex = qrmaster.web.data.SegmentPicker.indexOf(r.segment)
+                    val current = rotation.value
+                    val segCenter = segIndex * 45f + 22.5f
+                    val targetMod = (360f - segCenter) % 360f
+                    val currentMod = ((current % 360f) + 360f) % 360f
+                    var delta = targetMod - currentMod
+                    if (delta < 0) delta += 360f
+                    val target = current + 360f * 5 + delta
+                    rotation.animateTo(
+                        target,
+                        animationSpec = tween(
+                            durationMillis = 7000,
+                            easing = CubicBezierEasing(0.12f, 0.8f, 0.08f, 1f)
+                        )
+                    )
+                    resultText = when {
+                        r.prizePaise <= 0L && coinCfg0.enabled && adEarned -> {
+                            // Ad spin ka BLNT faisla server karta hai:
+                            // kabhi asal BLNT, kabhi coin (lagatar BLNT
+                            // kabhi nahi, roz BLNT hadd 3 — Worker me).
+                            val ar = CoinsApi.adSpinResult(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
+                            if (ar.ok && ar.str("outcome") == "coins" && ar.lng("grantedCoins") > 0) {
+                                resultCoinWin = true
+                                "You won ${ar.lng("grantedCoins")} Coins!"
+                            } else "Better Luck Next Time!"
+                        }
+                        r.prizePaise <= 0L && coinCfg0.enabled -> {
+                            // Free spin ka BLNT = coin inaam, SIRF
+                            // server se. Fail (cap/verify) ho to
+                            // purana sandesh hi.
+                            val cp = CoinsApi.spinCoinPrize(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
+                            if (cp.ok && cp.lng("grantedCoins") > 0) {
+                                resultCoinWin = true
+                                "You won ${cp.lng("grantedCoins")} Coins!"
+                            } else "Better Luck Next Time!"
+                        }
+                        r.prizePaise <= 0L -> "Better Luck Next Time!"
+                        r.jackpot -> "🎉 JACKPOT! You won ₹1"
+                        else -> "🎉 You won ₹${qrmaster.web.data.rupeesStr(r.prizePaise)}"
+                    }
+                    reloadSnapshot()
+                    state.refreshProfile()
+                    state.refreshCoinBalance()
+                }
+                is EarnApi.SpinOutcome.Rejected -> {
+                    resultText = null
+                    state.toast(r.message)
+                    reloadSnapshot()
+                }
+            }
+            spinning = false
+        }
+    }
+
+    fun openSponsored() {
+        val url = snapshot?.cfg?.coins?.adSpinSmartlinkUrl?.takeIf { it.isNotBlank() } ?: return
+        try { openExternal(url) } catch (e: Exception) { }
+    }
+
+    // Countdown khatm — chal raha step server par poora karo.
+    fun completeAdStep() {
+        val t = adToken ?: return
+        if (adBusy) return
+        adBusy = true
+        scope.launch {
+            val r = CoinsApi.adStep(t)
+            adBusy = false
+            val coinCfg0 = snapshot?.cfg?.coins ?: CoinWebConfig()
+            when {
+                r.ok && r.bool("unlocked") -> {
+                    adToken = null
+                    adStepDone = 0
+                    val usedTodayCount = r.lng("todayCount").toInt()
+                    if (usedTodayCount >= coinCfg0.webSpinAdDailyCap) adCapReached = true
+                    state.toast("Ad spin unlocked — spinning now!")
+                    reloadSnapshot()
+                    startSpin(adEarned = true)
+                }
+                r.ok -> {
+                    adStepDone = 1
+                    state.toast("Ad 1 of 2 done — one more ad for your spin.")
+                }
+                else -> {
+                    if (r.errorCode == "spin_ad_daily_cap") adCapReached = true
+                    if (r.errorCode == "token_used" || r.errorCode == "token_expired" ||
+                        r.errorCode == "invalid_token"
+                    ) {
+                        adToken = null
+                        adStepDone = 0
+                    }
+                    state.toast(coinErrorMessage(r.errorCode, coinCfg0))
+                }
+            }
+        }
+    }
+
+    // Watch-Ads-&-Spin shuru: server token + sponsor tab + countdown.
+    fun startAdFlow() {
+        if (adBusy || spinning) return
+        adBusy = true
+        scope.launch {
+            val r = CoinsApi.adStart()
+            adBusy = false
+            val coinCfg0 = snapshot?.cfg?.coins ?: CoinWebConfig()
+            if (!r.ok) {
+                if (r.errorCode == "spin_ad_daily_cap") adCapReached = true
+                state.toast(coinErrorMessage(r.errorCode, coinCfg0))
+                return@launch
+            }
+            adToken = r.str("token")
+            adStepDone = 0
+            openSponsored()
+            adSecondsLeft = 15
+        }
+    }
+
+    LaunchedEffect(adSecondsLeft) {
+        if (adSecondsLeft > 0) {
+            delay(1000)
+            val next = adSecondsLeft - 1
+            adSecondsLeft = next
+            if (next == 0) completeAdStep()
+        }
     }
 
     val snap = snapshot
@@ -2148,10 +2327,30 @@ fun SpinScreen(state: AppState) {
                                     withTransform({
                                         rotate(i * 45f + 22.5f + rotation.value, Offset(cx, cy))
                                     }) {
-                                        drawText(
-                                            layout,
-                                            topLeft = Offset(cx - layout.size.width / 2f, cy - radius * 0.80f)
-                                        )
+                                        if (i == 6) {
+                                            // Coins hisse par sona sikka —
+                                            // label ke upar, usi ghume hue
+                                            // frame me (label-drawing niyam).
+                                            val coinC = Offset(cx, cy - radius * 0.845f)
+                                            drawCircle(Color(0xFFFFD54F), radius = 9.5f, center = coinC)
+                                            drawCircle(
+                                                Color(0xFFD97706), radius = 8.75f, center = coinC,
+                                                style = Stroke(width = 1.4f)
+                                            )
+                                            drawCircle(
+                                                Color(0xFFD97706), radius = 5f, center = coinC,
+                                                style = Stroke(width = 1.1f)
+                                            )
+                                            drawText(
+                                                layout,
+                                                topLeft = Offset(cx - layout.size.width / 2f, cy - radius * 0.755f)
+                                            )
+                                        } else {
+                                            drawText(
+                                                layout,
+                                                topLeft = Offset(cx - layout.size.width / 2f, cy - radius * 0.80f)
+                                            )
+                                        }
                                     }
                                 }
                                 drawCircle(PurplePrimary, radius = 34f, center = Offset(cx, cy))
@@ -2169,7 +2368,13 @@ fun SpinScreen(state: AppState) {
                         }
                         if (resultText != null) {
                             Spacer(Modifier.height(10.dp))
-                            Text(resultText!!, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PurplePrimary)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (resultCoinWin) {
+                                    CoinBadge(20.dp)
+                                    Spacer(Modifier.width(7.dp))
+                                }
+                                Text(resultText!!, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PurplePrimary)
+                            }
                         }
                     }
                 }
@@ -2274,62 +2479,132 @@ fun SpinScreen(state: AppState) {
                                 )
                             }
                             else -> {
-                                Button(
-                                    onClick = {
-                                        if (spinning) return@Button
-                                        spinning = true
-                                        resultText = null
-                                        scope.launch {
-                                            // The result is COMMITTED first (money +
-                                            // spin count in one atomic write); only
-                                            // then does the wheel animate to it.
-                                            when (val r = EarnApi.spin()) {
-                                                is EarnApi.SpinOutcome.Ok -> {
-                                                    val segIndex = qrmaster.web.data.SegmentPicker.indexOf(r.segment)
-                                                    val current = rotation.value
-                                                    val segCenter = segIndex * 45f + 22.5f
-                                                    val targetMod = (360f - segCenter) % 360f
-                                                    val currentMod = ((current % 360f) + 360f) % 360f
-                                                    var delta = targetMod - currentMod
-                                                    if (delta < 0) delta += 360f
-                                                    val target = current + 360f * 5 + delta
-                                                    rotation.animateTo(
-                                                        target,
-                                                        animationSpec = tween(
-                                                            durationMillis = 7000,
-                                                            easing = CubicBezierEasing(0.12f, 0.8f, 0.08f, 1f)
-                                                        )
-                                                    )
-                                                    resultText = when {
-                                                        r.prizePaise <= 0L -> "Better Luck Next Time!"
-                                                        r.jackpot -> "🎉 JACKPOT! You won ₹1"
-                                                        else -> "🎉 You won ₹${qrmaster.web.data.rupeesStr(r.prizePaise)}"
-                                                    }
-                                                    reloadSnapshot()
-                                                    state.refreshProfile()
-                                                }
-                                                is EarnApi.SpinOutcome.Rejected -> {
-                                                    resultText = null
-                                                    state.toast(r.message)
-                                                    reloadSnapshot()
-                                                }
+                                // Spin button hamesha rehta hai (Ayan ka
+                                // final pravah 2026-11-28): free spin
+                                // khatm ho to yahi button ads ke badle
+                                // spin deta hai — 2 sponsored steps = 1
+                                // spin, roz webSpinAdDailyCap tak.
+                                val coinCfg = snap?.cfg?.coins ?: CoinWebConfig()
+                                val adFlowAvailable = coinCfg.enabled &&
+                                    coinCfg.adSpinSmartlinkUrl.isNotBlank()
+                                when {
+                                    adToken != null -> {
+                                        // Ad pravah chal raha hai.
+                                        if (adSecondsLeft > 0) {
+                                            Button(
+                                                onClick = {},
+                                                enabled = false,
+                                                shape = RoundedCornerShape(11.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                                            ) {
+                                                Text(
+                                                    "Sponsored visit — ${adSecondsLeft}s…",
+                                                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp
+                                                )
                                             }
-                                            spinning = false
+                                            Text(
+                                                "Sponsor ka page khul gaya hai — 15 second rukiye, phir ye step poora hoga.",
+                                                fontSize = 12.sp, color = MutedText
+                                            )
+                                        } else if (adStepDone == 1) {
+                                            Button(
+                                                onClick = {
+                                                    openSponsored()
+                                                    adSecondsLeft = 15
+                                                },
+                                                enabled = !adBusy,
+                                                shape = RoundedCornerShape(11.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                                            ) {
+                                                if (adBusy) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
+                                                else Text("Watch Ad 2 of 2", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                            }
+                                            Text(
+                                                "Ad 1 of 2 done — one more ad for your spin.",
+                                                fontSize = 12.sp, color = MutedText
+                                            )
+                                        } else if (adBusy) {
+                                            Button(
+                                                onClick = {},
+                                                enabled = false,
+                                                shape = RoundedCornerShape(11.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                                            ) {
+                                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
+                                            }
+                                        } else {
+                                            Button(
+                                                onClick = { completeAdStep() },
+                                                shape = RoundedCornerShape(11.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                                            ) {
+                                                Text("Continue", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                            }
                                         }
-                                    },
-                                    enabled = !spinning && snap != null,
-                                    shape = RoundedCornerShape(11.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
-                                    modifier = Modifier.fillMaxWidth().height(46.dp)
-                                ) {
-                                    if (spinning) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
-                                    else Text("Spin Now", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                                }
-                                if (spinsLeft <= 0) {
-                                    Text(
-                                        "No spins left today. Come back tomorrow — or go Premium for 10 spins a day.",
-                                        fontSize = 12.sp, color = MutedText
-                                    )
+                                    }
+                                    spinsLeft > 0 -> {
+                                        Button(
+                                            onClick = { startSpin() },
+                                            enabled = !spinning && snap != null,
+                                            shape = RoundedCornerShape(11.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                                        ) {
+                                            if (spinning) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
+                                            else Text("Spin Now", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                        }
+                                    }
+                                    adCapReached -> {
+                                        Button(
+                                            onClick = {},
+                                            enabled = false,
+                                            shape = RoundedCornerShape(11.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                                        ) {
+                                            Text("Spin Now", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                        }
+                                        Text(
+                                            "Free Ads Limit (10 spins a day) reached — spins resume tomorrow. Come back tomorrow, or go Premium for more daily spins.",
+                                            fontSize = 12.sp, color = MutedText
+                                        )
+                                    }
+                                    adFlowAvailable -> {
+                                        Button(
+                                            onClick = { startAdFlow() },
+                                            enabled = !adBusy && !spinning && snap != null,
+                                            shape = RoundedCornerShape(11.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                                        ) {
+                                            if (adBusy) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
+                                            else Text("Watch Ads & Spin", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                        }
+                                        Text(
+                                            "Free spins finished. Watch 2 short sponsored ads to unlock one more spin — the sponsor page opens in a new tab; stay 15 seconds on each step, then the wheel spins.",
+                                            fontSize = 12.sp, color = MutedText
+                                        )
+                                    }
+                                    else -> {
+                                        Button(
+                                            onClick = { startSpin() },
+                                            enabled = !spinning && snap != null,
+                                            shape = RoundedCornerShape(11.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = PurplePrimary),
+                                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                                        ) {
+                                            if (spinning) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(19.dp))
+                                            else Text("Spin Now", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                        }
+                                        Text(
+                                            "No spins left today. Come back tomorrow — or go Premium for 10 spins a day.",
+                                            fontSize = 12.sp, color = MutedText
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2349,6 +2624,29 @@ fun SpinScreen(state: AppState) {
                                     )
                                 }
                                 Text("Wallet", fontSize = 11.5.sp, color = MutedText)
+                            }
+                        }
+                        if (state.user != null && (snap?.cfg?.coins?.enabled ?: true)) {
+                            WhiteCard(Modifier.fillMaxWidth()) {
+                                Row(
+                                    Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CoinBadge(26.dp)
+                                    Spacer(Modifier.width(11.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Your Coins", fontSize = 12.5.sp, color = MutedText)
+                                        Text(
+                                            "${snap?.user?.coins ?: 0}",
+                                            fontSize = 17.sp, fontWeight = FontWeight.Bold, color = NavyText
+                                        )
+                                    }
+                                    Text(
+                                        "View",
+                                        fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = PurplePrimary,
+                                        modifier = Modifier.clickable { state.navigate(Screen.Coins) }
+                                    )
+                                }
                             }
                         }
                         Text(

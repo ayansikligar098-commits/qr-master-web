@@ -362,7 +362,10 @@ object SpinLogic {
         val notifRewardSpins: Int = 3,
         val notifBanLimit: Int = 6,
         val adRewardPaise: Long = 5L,
-        val adDailyCap: Int = 5
+        val adDailyCap: Int = 5,
+        // SIRF WEBSITE (Ayan 2026-11-28): BLNT ka itna % sabse chhote
+        // ₹ inaam me badalta hai. Android app is key ko nahi padhta.
+        val blntCutPct: Int = 50
     ) {
         companion object {
             fun fromSettings(raw: Map<String, Double>): Config {
@@ -405,7 +408,8 @@ object SpinLogic {
                     notifRewardSpins = intOf("notifRewardSpins", 3, 0, 50),
                     notifBanLimit = intOf("notifToggleBanLimit", 6, 0, 100),
                     adRewardPaise = longOf("adRewardPaise", 5L, 0, 100000),
-                    adDailyCap = intOf("adDailyCap", 5, 0, 50)
+                    adDailyCap = intOf("adDailyCap", 5, 0, 50),
+                    blntCutPct = intOf("spinWebBlntCutPct", 50, 0, 100)
                 )
             }
         }
@@ -452,7 +456,7 @@ object SpinLogic {
     private fun pct100(pct: Int): Int = pct * 100
     private fun pct100(pct: Double): Int = (pct * 100.0 + 0.5).toInt() // roundToInt for positive values
 
-    fun decidePrize(cfg: Config, balancePaise: Long, firstSpin: Boolean, rollIn: Int): Long {
+    fun decidePrize(cfg: Config, balancePaise: Long, firstSpin: Boolean, rollIn: Int, blntRollIn: Int = -1): Long {
         if (balancePaise >= cfg.minWithdrawPaise) return 0
         var roll = rollIn
         if (roll < 0) roll = 0
@@ -503,6 +507,20 @@ object SpinLogic {
             if (win > room) win = room
         }
         if (win < 0) win = 0
+        // SIRF WEBSITE (Ayan ka order 2026-11-28, "BLNT jyada mat
+        // dena"): BLNT (win 0) ka blntCutPct hissa sabse chhote ₹
+        // inaam (prize1) me badal jata hai — jackpot/bade inaam ki
+        // dar bilkul nahi badhti. Band D (jackpot window) aur Band G
+        // (₹20 ceiling guard) BAHAR hain: wahan ₹1 hi JACKPOT hota
+        // hai, nakli jackpot nahi banana. Android app par ye nahi.
+        if (win == 0L && blntRollIn >= 0 && band != BAND_D && band != BAND_G && cfg.prize1 > 0) {
+            var broll = blntRollIn
+            if (broll > 9999) broll = 9999
+            if (broll < cfg.blntCutPct * 100) {
+                val room = cfg.minWithdrawPaise - balancePaise
+                if (room > 0) win = minOf(cfg.prize1, room)
+            }
+        }
         return win
     }
 
@@ -659,6 +677,7 @@ data class EarnUser(
     val premiumUntilMs: Long = 0L,
     val banned: Boolean = false,
     val credits: Long = 0L,
+    val coins: Long = 0L,
     val walletPaise: Long = 0L,
     val spinDate: String = "",
     val spinUsedToday: Int = 0,
@@ -695,6 +714,7 @@ data class EarnUser(
             premiumUntilMs = if (f.eHas("premiumUntil")) f.eTsMs("premiumUntil") else f.eTsMs("premiumExpiry"),
             banned = f.eBool("banned"),
             credits = f.eLong("credits"),
+            coins = f.eLong("coins"),
             walletPaise = f.eLong("walletBalancePaise"),
             spinDate = f.eStr("spinDate"),
             spinUsedToday = f.eLong("spinUsedToday").toInt(),
@@ -751,7 +771,8 @@ data class WebConfig(
     val maintenanceMode: Boolean = false,
     val maintenanceMessage: String = "The app is under maintenance. Please try again in a little while.",
     val announcementTitle: String = "",
-    val announcementText: String = ""
+    val announcementText: String = "",
+    val coins: CoinWebConfig = CoinWebConfig()
 )
 
 /** settings/config -> numeric map + typed config (the app's AppConfig.load). */
@@ -828,7 +849,21 @@ suspend fun loadWebConfig(token: String?): WebConfig {
         maintenanceMode = fields.eBool("maintenanceMode"),
         maintenanceMessage = maintMsg.ifBlank { "The app is under maintenance. Please try again in a little while." },
         announcementTitle = fields.eStr("announcementTitle"),
-        announcementText = annText
+        announcementText = annText,
+        coins = CoinWebConfig(
+            // coinFeatureEnabled ghayab ho to app ki tarah default ON.
+            enabled = if (fields.eHas("coinFeatureEnabled")) fields.eBool("coinFeatureEnabled") else true,
+            coinsPerAd = intOf("coinsPerAd", 4, 0, 1000),
+            playRedeemCoins = intOf("playRedeemCoins", 200, 1, 100000),
+            amazonRedeemCoins = intOf("amazonRedeemCoins", 200, 1, 100000),
+            spinAdCoins = intOf("spinAdCoins", 3, 0, 1000),
+            welcomeCoins = intOf("welcomeCoins", 200, 0, 100000),
+            redeemUnlockAds = intOf("redeemUnlockAds", 5, 0, 100),
+            referralCoins = intOf("referralCoins", 50, 0, 10000),
+            spinCoinPrizeDailyCap = intOf("spinCoinPrizeDailyCap", 20, 0, 100),
+            webSpinAdDailyCap = intOf("webSpinAdDailyCap", 10, 0, 50),
+            adSpinSmartlinkUrl = fields.eStr("adSpinSmartlinkUrl")
+        )
     )
 }
 
@@ -988,12 +1023,24 @@ object EarnApi {
             val directBig: Boolean,
             val walletAfterPaise: Long,
             val dailyLeftAfter: Int,
-            val giftLeftAfter: Int
+            val giftLeftAfter: Int,
+            // Coin pravah ke liye (Worker saboot): ye spin pehla tha
+            // kya, aur commit ke BAAD ke spin counters.
+            val wasFirstSpin: Boolean = false,
+            val todayStr: String = "",
+            val verifyUsedToday: Int = 0,
+            val verifyGiftUsed: Int = 0
         ) : SpinOutcome
         data class Rejected(val code: String, val message: String) : SpinOutcome
     }
 
-    suspend fun spin(): SpinOutcome {
+    /**
+     * Ek spin. [adEarned] = ye spin Watch-Ads-&-Spin se khula hai —
+     * tab website-wala BLNT->₹1 badlav NAHI lagta (ad spin ka BLNT
+     * faisla server /v1/spin/adspin-result karta hai: asal BLNT ya
+     * coin). Free spins par badlav hamesha lagta hai.
+     */
+    suspend fun spin(adEarned: Boolean = false): SpinOutcome {
         val token = FirebaseApi.validToken()
             ?: return SpinOutcome.Rejected("NETWORK", "Please sign in again.")
         val uid = FirebaseApi.uid ?: return SpinOutcome.Rejected("NETWORK", "Please sign in again.")
@@ -1021,7 +1068,10 @@ object EarnApi {
         val useGift = dailyLeft <= 0
         if (useGift && giftLeft <= 0) return SpinOutcome.Rejected("NO_SPINS", "No spins left today")
 
-        val prize = SpinLogic.decidePrize(c, user.walletPaise, !user.spinFirstDone, Random.nextInt(10000))
+        val prize = SpinLogic.decidePrize(
+            c, user.walletPaise, !user.spinFirstDone, Random.nextInt(10000),
+            if (adEarned) -1 else Random.nextInt(10000)
+        )
         val walletAfter = user.walletPaise + prize
 
         val fields = HashMap<String, JsonObject>()
@@ -1069,7 +1119,11 @@ object EarnApi {
             directBig = SpinLogic.isDirectBig(user.walletPaise, prize),
             walletAfterPaise = walletAfter,
             dailyLeftAfter = if (useGift) dailyLeft else dailyLeft - 1,
-            giftLeftAfter = if (useGift) giftLeft - 1 else giftLeft
+            giftLeftAfter = if (useGift) giftLeft - 1 else giftLeft,
+            wasFirstSpin = !user.spinFirstDone,
+            todayStr = today,
+            verifyUsedToday = if (postDate == today) postUsed else 0,
+            verifyGiftUsed = postGift
         )
     }
 
