@@ -68,13 +68,17 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -87,7 +91,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.sin
 import kotlinx.browser.window
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
@@ -2075,18 +2082,115 @@ fun PdfConverterScreen(state: AppState) {
 
 /* ---------------- 5) Spin & Earn (Android app wheel, real engine) ---------------- */
 
+// Hisso ke naam — index 6 (coin) ka chehra label se NAHI banta:
+// wahan drawGoldCoin + number banta hai (neeche wheel drawing dekho).
 val SpinSegmentLabels = listOf("₹1", "₹2", "₹5", "₹10", "₹15", "₹20", "Coins", "JACKPOT")
 
-/** Sona sikka — pahiye ke Coins hisse, natije aur header chip par ek hi pehchan. */
+/**
+ * Sona sikka — PROPER coin logo (Ayan 2026-11-28: "coin ka proper
+ * logo banao, lage ki coin hai"). EK hi drawing har jagah: header
+ * chip, pahiye ka coin hissa, Your Coins card, Coins page aur
+ * coin-jeet ka natija. Pehchan: sunehra radial rang, utha hua mota
+ * kinara (rim) jisme kinare ki khaanch (reeding), andar ki ring,
+ * ubhra hua tara (embossed star) aur upar-bayein chamak. Coin par
+ * ₹ ka nishan KABHI nahi — ₹ sirf rupaye wale hisso par rehta hai.
+ */
+fun DrawScope.drawGoldCoin(center: Offset, radius: Float) {
+    val r = radius
+    val coinPath = Path().apply {
+        addOval(Rect(Offset(center.x - r, center.y - r), Offset(center.x + r, center.y + r)))
+    }
+    // Sikke ka pith: halke kendr se gehare kinare tak sunehra rang
+    // aur upar-bayein chamak — dono coin ke ghare ke andar (clip).
+    clipPath(coinPath) {
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFFFF7CC), Color(0xFFFFD54F),
+                    Color(0xFFFFB300), Color(0xFFE08A00)
+                ),
+                center = Offset(center.x - r * 0.35f, center.y - r * 0.35f),
+                radius = r * 1.65f
+            ),
+            radius = r, center = center
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.55f),
+                    Color.White.copy(alpha = 0f)
+                ),
+                center = Offset(center.x - r * 0.38f, center.y - r * 0.45f),
+                radius = r * 0.62f
+            ),
+            radius = r * 0.62f,
+            center = Offset(center.x - r * 0.38f, center.y - r * 0.45f)
+        )
+    }
+    // Utha hua mota kinara (rim) — gehara sunehra ghata + halki si
+    // andar wali chamak-rekha.
+    drawCircle(
+        Color(0xFF9C6B00), radius = r * 0.93f, center = center,
+        style = Stroke(width = r * 0.14f)
+    )
+    drawCircle(
+        Color(0xFFFFE082), radius = r * 0.855f, center = center,
+        style = Stroke(width = r * 0.03f)
+    )
+    // Kinare ki khaanch (reeding): ghare bhar me chhoti gehri rekhaen.
+    val notches = 28
+    for (n in 0 until notches) {
+        val a = n * (2.0 * PI / notches)
+        val c1 = Offset(
+            center.x + (cos(a) * r * 0.885f).toFloat(),
+            center.y + (sin(a) * r * 0.885f).toFloat()
+        )
+        val c2 = Offset(
+            center.x + (cos(a) * r * 0.975f).toFloat(),
+            center.y + (sin(a) * r * 0.975f).toFloat()
+        )
+        drawLine(
+            Color(0xFF7A5200).copy(alpha = 0.45f), c1, c2,
+            strokeWidth = maxOf(0.8f, r * 0.045f)
+        )
+    }
+    // Andar ki ring.
+    drawCircle(
+        Color(0xFFC07D00), radius = r * 0.70f, center = center,
+        style = Stroke(width = r * 0.06f)
+    )
+    drawCircle(
+        Color(0xFFFFECB3).copy(alpha = 0.8f), radius = r * 0.75f, center = center,
+        style = Stroke(width = r * 0.022f)
+    )
+    // Ubhra hua tara (embossed star): neeche gehara saaya, upar
+    // halka tara — dabi hui mohar jaisa asar.
+    drawPath(coinStarPath(Offset(center.x, center.y + r * 0.05f), r * 0.40f), Color(0xFFA66A00))
+    drawPath(coinStarPath(center, r * 0.40f), Color(0xFFFFE066))
+}
+
+/** Panch-nok tara ka path — coin ke ubhre nishan ke liye. */
+private fun coinStarPath(center: Offset, outerR: Float): Path {
+    val p = Path()
+    val innerR = outerR * 0.45f
+    for (i in 0 until 10) {
+        val a = -PI / 2 + i * (PI / 5)
+        val rad = if (i % 2 == 0) outerR else innerR
+        val x = center.x + (cos(a) * rad).toFloat()
+        val y = center.y + (sin(a) * rad).toFloat()
+        if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+    }
+    p.close()
+    return p
+}
+
 @Composable
 fun CoinBadge(size: androidx.compose.ui.unit.Dp = 18.dp) {
     Canvas(Modifier.size(size)) {
-        val c = Offset(this.size.width / 2f, this.size.height / 2f)
-        val r = this.size.minDimension / 2f
-        drawCircle(Color(0xFFFFD54F), radius = r, center = c)
-        drawCircle(Color(0xFFD97706), radius = r - 0.75f, center = c, style = Stroke(width = 1.5f))
-        drawCircle(Color(0xFFD97706), radius = r * 0.55f, center = c, style = Stroke(width = 1.2f))
-        drawCircle(Color(0xFFD97706), radius = r * 0.14f, center = c)
+        drawGoldCoin(
+            Offset(this.size.width / 2f, this.size.height / 2f),
+            this.size.minDimension / 2f
+        )
     }
 }
 val SpinSegmentColors = listOf(
@@ -2121,6 +2225,10 @@ fun SpinScreen(state: AppState) {
     var adBusy by remember { mutableStateOf(false) }
     var adCapReached by remember { mutableStateOf(false) }
     var resultCoinWin by remember { mutableStateOf(false) }
+    // Pahiye ke coin hisse ka chehra: null = idle (logo + "1–200");
+    // jis spin ka coin faisla animation se pehle aa gaya, uski
+    // asal rakam chehre par dikhti hai.
+    var coinFaceAmount by remember { mutableStateOf<Long?>(null) }
 
     // Ek asal spin — Spin button aur ad-unlock ke baad ka auto-spin,
     // dono yahi chalate hain (niyam ek hi: result pehle commit, phir
@@ -2130,6 +2238,7 @@ fun SpinScreen(state: AppState) {
         spinning = true
         resultText = null
         resultCoinWin = false
+        coinFaceAmount = null
         scope.launch {
             when (val r = EarnApi.spin(adEarned)) {
                 is EarnApi.SpinOutcome.Ok -> {
@@ -2147,6 +2256,28 @@ fun SpinScreen(state: AppState) {
                             }
                         }
                     }
+                    // Coin faisla animation se PEHLE: spin ka natija
+                    // server par commit ho chuka hai, isliye BLNT
+                    // wale spin ka coin faisla bhi abhi mil sakta
+                    // hai — pahiye ka coin hissa animation ke dauraan
+                    // asal rakam dikhayega (chehra = coinFaceAmount).
+                    var coinWinAmount = 0L
+                    if (r.prizePaise <= 0L && coinCfg0.enabled) {
+                        coinWinAmount = if (adEarned) {
+                            // Ad spin ka BLNT faisla server karta hai:
+                            // kabhi asal BLNT, kabhi coin (lagatar BLNT
+                            // kabhi nahi, roz BLNT hadd 3 — Worker me).
+                            val ar = CoinsApi.adSpinResult(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
+                            if (ar.ok && ar.str("outcome") == "coins") ar.lng("grantedCoins") else 0L
+                        } else {
+                            // Free spin ka BLNT = coin inaam, SIRF
+                            // server se. Fail (cap/verify) ho to
+                            // purana sandesh hi.
+                            val cp = CoinsApi.spinCoinPrize(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
+                            if (cp.ok) cp.lng("grantedCoins") else 0L
+                        }
+                        if (coinWinAmount > 0) coinFaceAmount = coinWinAmount
+                    }
                     val segIndex = qrmaster.web.data.SegmentPicker.indexOf(r.segment)
                     val current = rotation.value
                     val segCenter = segIndex * 45f + 22.5f
@@ -2163,25 +2294,9 @@ fun SpinScreen(state: AppState) {
                         )
                     )
                     resultText = when {
-                        r.prizePaise <= 0L && coinCfg0.enabled && adEarned -> {
-                            // Ad spin ka BLNT faisla server karta hai:
-                            // kabhi asal BLNT, kabhi coin (lagatar BLNT
-                            // kabhi nahi, roz BLNT hadd 3 — Worker me).
-                            val ar = CoinsApi.adSpinResult(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
-                            if (ar.ok && ar.str("outcome") == "coins" && ar.lng("grantedCoins") > 0) {
-                                resultCoinWin = true
-                                "You won ${ar.lng("grantedCoins")} Coins!"
-                            } else "Better Luck Next Time!"
-                        }
-                        r.prizePaise <= 0L && coinCfg0.enabled -> {
-                            // Free spin ka BLNT = coin inaam, SIRF
-                            // server se. Fail (cap/verify) ho to
-                            // purana sandesh hi.
-                            val cp = CoinsApi.spinCoinPrize(r.todayStr, r.verifyUsedToday, r.verifyGiftUsed)
-                            if (cp.ok && cp.lng("grantedCoins") > 0) {
-                                resultCoinWin = true
-                                "You won ${cp.lng("grantedCoins")} Coins!"
-                            } else "Better Luck Next Time!"
+                        coinWinAmount > 0 -> {
+                            resultCoinWin = true
+                            "You won $coinWinAmount Coins!"
                         }
                         r.prizePaise <= 0L -> "Better Luck Next Time!"
                         r.jackpot -> "🎉 JACKPOT! You won ₹1"
@@ -2315,37 +2430,48 @@ fun SpinScreen(state: AppState) {
                                     )
                                 }
                                 for (i in 0 until 8) {
-                                    val label = SpinSegmentLabels[i]
-                                    val layout = textMeasurer.measure(
-                                        label,
-                                        style = TextStyle(
-                                            color = Color.White,
-                                            fontSize = if (label.length > 3) 12.5.sp else 16.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
                                     withTransform({
                                         rotate(i * 45f + 22.5f + rotation.value, Offset(cx, cy))
                                     }) {
                                         if (i == 6) {
-                                            // Coins hisse par sona sikka —
-                                            // label ke upar, usi ghume hue
-                                            // frame me (label-drawing niyam).
-                                            val coinC = Offset(cx, cy - radius * 0.845f)
-                                            drawCircle(Color(0xFFFFD54F), radius = 9.5f, center = coinC)
-                                            drawCircle(
-                                                Color(0xFFD97706), radius = 8.75f, center = coinC,
-                                                style = Stroke(width = 1.4f)
+                                            // Coin hissa: PROPER sunehra
+                                            // sikka + uske neeche NUMBER —
+                                            // ₹ hisso ki tarah (nishan +
+                                            // rakam), akela "Coins" shabd
+                                            // kabhi nahi. Idle me dayra
+                                            // "1–200"; jis spin ka faisla
+                                            // coin aaya, usi ki animation
+                                            // me chehre par asal rakam.
+                                            val faceText = coinFaceAmount?.toString() ?: "1–200"
+                                            val faceLayout = textMeasurer.measure(
+                                                faceText,
+                                                style = TextStyle(
+                                                    color = Color.White,
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
                                             )
-                                            drawCircle(
-                                                Color(0xFFD97706), radius = 5f, center = coinC,
-                                                style = Stroke(width = 1.1f)
+                                            drawGoldCoin(
+                                                Offset(cx, cy - radius * 0.815f),
+                                                radius * 0.108f
                                             )
                                             drawText(
-                                                layout,
-                                                topLeft = Offset(cx - layout.size.width / 2f, cy - radius * 0.755f)
+                                                faceLayout,
+                                                topLeft = Offset(
+                                                    cx - faceLayout.size.width / 2f,
+                                                    cy - radius * 0.665f
+                                                )
                                             )
                                         } else {
+                                            val label = SpinSegmentLabels[i]
+                                            val layout = textMeasurer.measure(
+                                                label,
+                                                style = TextStyle(
+                                                    color = Color.White,
+                                                    fontSize = if (label.length > 3) 12.5.sp else 16.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            )
                                             drawText(
                                                 layout,
                                                 topLeft = Offset(cx - layout.size.width / 2f, cy - radius * 0.80f)
@@ -2370,8 +2496,8 @@ fun SpinScreen(state: AppState) {
                             Spacer(Modifier.height(10.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (resultCoinWin) {
-                                    CoinBadge(20.dp)
-                                    Spacer(Modifier.width(7.dp))
+                                    CoinBadge(36.dp)
+                                    Spacer(Modifier.width(9.dp))
                                 }
                                 Text(resultText!!, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PurplePrimary)
                             }
