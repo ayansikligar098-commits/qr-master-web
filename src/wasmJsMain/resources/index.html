@@ -332,10 +332,10 @@
     // ── Minimal .docx writer (original code, no library) ─────────────────
     // A .docx is a ZIP of Word XML. Entries are stored uncompressed, so
     // only a CRC32 table and the ZIP local/central headers are needed.
-    function qmCrc32(bytes) {
-        var table = qmCrc32._t;
+    function qmZipCrc32(bytes) {
+        var table = qmZipCrc32._t;
         if (!table) {
-            table = qmCrc32._t = new Int32Array(256);
+            table = qmZipCrc32._t = new Int32Array(256);
             for (var n = 0; n < 256; n++) {
                 var c = n;
                 for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
@@ -395,7 +395,7 @@
         ];
         var parts = [], central = [], offset = 0;
         entries.forEach(function (e) {
-            var name = enc.encode(e[0]), data = e[1], crc = qmCrc32(data);
+            var name = enc.encode(e[0]), data = e[1], crc = qmZipCrc32(data);
             var lh = new DataView(new ArrayBuffer(30));
             lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true);
             lh.setUint16(6, 0x0800, true);
