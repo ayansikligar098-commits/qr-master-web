@@ -784,7 +784,8 @@ fun pdfCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Sign PDF", "", "PDF Tools", IconKind.Edit, Color(0xFFD97706), desc = "Sign a PDF with your signature") { it.openPdf("Sign PDF") },
         ToolCardDef("N-Up Print", "", "PDF Tools", IconKind.Grid, Color(0xFF059669), desc = "Fit 2 or 4 pages on one A4 sheet — save paper") { it.openPdf("N-Up Print") },
         ToolCardDef("Organize PDF", "", "PDF Tools", IconKind.Swap, Color(0xFF0D9488), desc = "Reorder or delete pages in a PDF") { it.openPdf("Organize PDF") },
-        ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B), desc = "View and edit PDF details") { it.openPdf("PDF Metadata") }
+        ToolCardDef("PDF Metadata", "", "PDF Tools", IconKind.Info, Color(0xFF64748B), desc = "View and edit PDF details") { it.openPdf("PDF Metadata") },
+        ToolCardDef("PDF to Word", "", "PDF Tools", IconKind.FileText, Color(0xFF1E40AF), desc = "Turn a PDF into an editable Word document") { it.openPdf("PDF to Word") }
     )
 fun imageCatalog(): List<ToolCardDef> = listOf(
         ToolCardDef("Image Tools", "", "Image Tools", IconKind.Image, Color(0xFF16A34A), desc = "All image tools in one place") { it.navigate(Screen.ImageTools) },
@@ -1379,6 +1380,7 @@ fun PdfConverterScreen(state: AppState) {
     var errorText by remember { mutableStateOf<String?>(null) }
     var resultB64 by remember { mutableStateOf<String?>(null) }
     var resultName by remember { mutableStateOf("output.pdf") }
+    var resultMime by remember { mutableStateOf("application/pdf") }
     var pageImages by remember { mutableStateOf<List<String>>(emptyList()) }
     var pageBitmaps by remember { mutableStateOf<Map<Int, ImageBitmap>>(emptyMap()) }
     var pageCount by remember { mutableStateOf<Int?>(null) }
@@ -1408,7 +1410,7 @@ fun PdfConverterScreen(state: AppState) {
     LaunchedEffect(state.pdfTool) {
         if (state.pdfTool == "Compress PDF") {
             state.navigate(Screen.CompressPdf)
-        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print", "Organize PDF", "Sign PDF")) {
+        } else if (state.pdfTool in listOf("Merge PDF", "Split PDF", "Rotate PDF", "PDF to Images", "Images to PDF", "Watermark", "Page Numbers", "PDF Metadata", "N-Up Print", "Organize PDF", "Sign PDF", "PDF to Word")) {
             selectedTool = state.pdfTool
         } else {
             selectedTool = "Merge PDF"
@@ -1418,6 +1420,7 @@ fun PdfConverterScreen(state: AppState) {
         files = emptyList()
         signFiles = emptyList()
         resultB64 = null; pageImages = emptyList(); pageCount = null
+        resultMime = "application/pdf"
         statusText = null; errorText = null
         orgOrder = emptyList()
     }
@@ -1498,7 +1501,8 @@ fun PdfConverterScreen(state: AppState) {
                     Triple("N-Up Print", IconKind.Grid, Color(0xFF059669)),
                     Triple("Organize PDF", IconKind.Swap, Color(0xFF0D9488)),
                     Triple("Sign PDF", IconKind.Edit, Color(0xFFD97706)),
-                    Triple("PDF Metadata", IconKind.Info, Color(0xFF64748B))
+                    Triple("PDF Metadata", IconKind.Info, Color(0xFF64748B)),
+                    Triple("PDF to Word", IconKind.FileText, Color(0xFF1E40AF))
                 ).forEach { (name, icon, color) ->
                     Column(
                         Modifier.width(118.dp).height(96.dp)
@@ -1732,6 +1736,10 @@ fun PdfConverterScreen(state: AppState) {
                                 }
                             }
                         }
+                        "PDF to Word" -> {
+                            Text("Turns the PDF's text into an editable Word (.docx) file — the file never leaves your browser. Layout, images and tables are not kept; the text comes out as clean paragraphs. Scanned image-only PDFs have no text to convert.",
+                                fontSize = 12.sp, color = MutedText)
+                        }
                         "Sign PDF" -> {
                             Text("Your signature is stamped onto the PDF — the file never leaves your browser.",
                                 fontSize = 12.sp, color = MutedText)
@@ -1825,6 +1833,7 @@ fun PdfConverterScreen(state: AppState) {
                             "Organize PDF" -> "Save Organized PDF"
                             "Sign PDF" -> "Sign PDF"
                             "PDF Metadata" -> "Save Metadata"
+                            "PDF to Word" -> "Convert to Word"
                             else -> "Process"
                         },
                         enabled = files.isNotEmpty() && (selectedTool != "Merge PDF" || files.size >= 2)
@@ -1960,6 +1969,17 @@ fun PdfConverterScreen(state: AppState) {
                                     recordHistory("Sign PDF", "PDF signed", "$signPages, $signPosition")
                                 }
                             }
+                            "PDF to Word" -> scope.launch {
+                                val f = files.first()
+                                val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
+                                runOp("pdfToWord", "{\"pdf\":\"$b64\"}") { res ->
+                                    resultB64 = res.asyncStr("b64")
+                                    resultName = "converted.docx"
+                                    resultMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                    statusText = "Converted ${res.asyncStr("pages")} page(s) to Word — download the .docx file."
+                                    recordHistory("PDF to Word", "PDF converted to Word", "${res.asyncStr("pages")} pages")
+                                }
+                            }
                             "PDF to Images" -> scope.launch {
                                 val f = files.first()
                                 val b64 = loadFileBase64(f.id) ?: run { errorText = "Could not read the file."; return@launch }
@@ -2009,7 +2029,7 @@ fun PdfConverterScreen(state: AppState) {
                     if (resultB64 != null) {
                         Button(
                             onClick = {
-                                downloadFileBase64(resultName, resultB64!!, "application/pdf")
+                                downloadFileBase64(resultName, resultB64!!, resultMime)
                                 state.toast("Downloaded $resultName")
                             },
                             shape = RoundedCornerShape(11.dp),

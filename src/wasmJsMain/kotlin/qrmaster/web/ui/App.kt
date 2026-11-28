@@ -196,6 +196,7 @@ private fun slugOf(state: AppState): String = when (state.screen) {
         "N-Up Print" -> "n-up-print"
         "Organize PDF" -> "organize-pdf"
         "Sign PDF" -> "sign-pdf"
+        "PDF to Word" -> "pdf-to-word"
         else -> "pdf-converter"
     }
     Screen.PdfEditor -> "pdf-editor"
@@ -258,6 +259,7 @@ private fun applySlug(state: AppState, rawHash: String): Boolean {
         "n-up-print" -> state.openPdf("N-Up Print")
         "organize-pdf" -> state.openPdf("Organize PDF")
         "sign-pdf" -> state.openPdf("Sign PDF")
+        "pdf-to-word" -> state.openPdf("PDF to Word")
         "pdf-editor" -> state.navigate(Screen.PdfEditor)
         "compress-pdf" -> state.navigate(Screen.CompressPdf)
         "compress-image" -> state.navigate(Screen.CompressImage)

@@ -426,7 +426,7 @@ fun PdfEditorScreen(state: AppState) {
     }
     LaunchedEffect(Unit) {
         if (pages.isNotEmpty() && pdfB64 != null && previews.isEmpty()) {
-            statusText = "Opened ${pages.size} pages."
+            statusText = "Opened ${pages.size} ${if (pages.size == 1) "page" else "pages"}."
             renderCurrent()
             pages.indices.forEach { renderThumb(it) }
         }
@@ -473,7 +473,7 @@ fun PdfEditorScreen(state: AppState) {
         statusText = when {
             restored -> "Your last document was restored — pick up right where you left off, or tap “Open PDF” to start over."
             count > 50 -> "Opened the first 50 of $count pages (editor limit)."
-            else -> "Opened $count pages."
+            else -> "Opened $count ${if (count == 1) "page" else "pages"}."
         }
         // Discover the document's fillable form fields (Fill Form tab).
         // Best-effort: a PDF without an AcroForm yields an empty list
@@ -483,7 +483,7 @@ fun PdfEditorScreen(state: AppState) {
             formFields = parseEdFormFields(fres)
             if (formFields.isNotEmpty()) {
                 statusText = (statusText ?: "") +
-                    " This PDF has ${formFields.size} fillable form field(s) — see the Fill Form tab."
+                    " This PDF has ${formFields.size} fillable form ${if (formFields.size == 1) "field" else "fields"} — see the Fill Form tab."
             }
         }
         if (tab == EdTab.Form && formFields.isEmpty()) tab = EdTab.Edit
