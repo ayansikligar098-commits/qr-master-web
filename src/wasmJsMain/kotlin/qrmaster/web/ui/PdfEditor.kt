@@ -305,10 +305,11 @@ fun PdfEditorScreen(state: AppState) {
     var selectedId by remember { mutableStateOf<Int?>(null) }
     var nextId by remember { mutableStateOf(1) }
     var zoom by remember { mutableStateOf(1f) }
-    var zoomMode by remember { mutableStateOf("width") } // "width" (default) | "page" | "manual"
+    var zoomMode by remember { mutableStateOf("page") } // "page" (default) | "width" | "manual"
     var vpSize by remember { mutableStateOf(IntSize.Zero) } // measured page-viewport size, px
     val vScroll = rememberScrollState() // hoisted: page switches scroll back to the top
-    var propsOpen by remember { mutableStateOf(false) } // narrow screens: Properties overlay
+    var propsOpen by remember { mutableStateOf(false) } // Properties panel: on demand (selection / toggle), never permanent
+    var railOpen by remember { mutableStateOf(true) } // thumbnails rail: toggleable from the bottom bar
     var busy by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -453,7 +454,7 @@ fun PdfEditorScreen(state: AppState) {
         pages = (0 until capped).map { EdPageState(srcIndex = it) }
         current = 0; selectedId = null; undoStack = emptyList(); redoStack = emptyList()
         formFields = emptyList()
-        zoom = 1f; zoomMode = "width"; propsOpen = false
+        zoom = 1f; zoomMode = "page"; propsOpen = false
         previews = emptyMap(); thumbs = emptyMap(); dims = emptyMap(); pageErrors = emptyMap()
         // Gate on page 1 actually rendering. The pdf-lib page count above
         // ignores encryption, so without this gate a password-protected
@@ -1443,13 +1444,16 @@ fun PdfEditorScreen(state: AppState) {
               val wide = maxWidth >= 980.dp
               // Full editor workspace (owner's order): opening a PDF opens
               // a real edit page — a full-width toolbar on top, page
-              // thumbnails on the left, the page itself large and centred,
-              // and Properties as a right-hand panel. On narrower screens
-              // Properties floats over the page as an overlay instead of
-              // stacking underneath and crushing the page into a sliver
-              // (the old <1150 dp layout did exactly that on smaller PCs).
+              // thumbnails on the left, the page itself large and centred.
+              // Properties is an on-demand panel (right side on wide
+              // screens, floating overlay on narrow ones): it appears on
+              // selection or via its toggle, never permanently — a
+              // permanent panel crushed the page into a sliver.
               LaunchedEffect(selectedId, wide) {
-                  if (selectedId != null && !wide) propsOpen = true
+                  // Selecting an object opens Properties on ANY layout
+                  // (Smallpdf behaviour); on wide screens it used to sit
+                  // there permanently, eating 300 dp of page width.
+                  if (selectedId != null) propsOpen = true
               }
               Box(Modifier.fillMaxSize()) {
               Column(Modifier.fillMaxSize()) {
@@ -1753,7 +1757,8 @@ fun PdfEditorScreen(state: AppState) {
                     }
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.weight(1f).fillMaxWidth()) {
-                // ── thumbnails rail ──
+                // ── thumbnails rail (bottom-bar "Pages" toggle) ──
+                if (railOpen) {
                 LazyColumn(
                     Modifier.width(96.dp).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1798,11 +1803,12 @@ fun PdfEditorScreen(state: AppState) {
                     }
                 }
                 Spacer(Modifier.width(12.dp))
+                }
                 // ── centre: page viewport + bottom bar ──
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    // ── page viewport: the page is fitted to the
-                    // viewport width until the user zooms manually,
-                    // and centred whenever it is narrower than the
+                    // ── page viewport: the whole page is fitted into
+                    // the viewport until the user zooms manually,
+                    // and centred whenever it is smaller than the
                     // viewport — the page is the dominant element ──
                     BoxWithConstraints(
                         Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFECECF3))
@@ -1822,16 +1828,15 @@ fun PdfEditorScreen(state: AppState) {
                         val vpH = maxHeight
                         val densityNow = LocalDensity.current
                         // Zoom is computed from the MEASURED viewport size.
-                        // Default = Fit-to-Width (Smallpdf behaviour): the
-                        // page fills the workspace width and tall pages
-                        // scroll vertically, so a tall page (birth
-                        // certificate, 1191x1684 pt) opens large and
-                        // readable even in a short window. The old default
-                        // fitted the WHOLE page, so on a short viewport the
-                        // height ratio crushed zoom to the 0.1 floor and the
-                        // page opened at 10%, tiny and unusable — Ayan's
-                        // shop-PC video, 25 Nov 2026, reproduced at
-                        // 1024x560 in the harness.
+                        // Default = Fit Page (Ayan's order, 28 Nov 2026,
+                        // Smallpdf behaviour): the WHOLE page sits inside
+                        // the visible viewport on load — no scrolling to
+                        // see the bottom. The previous Fit-to-Width default
+                        // opened an A4 page at ~103% on his shop PC, so
+                        // only the top ~60% showed and the rest ran far
+                        // below the fold (his photos, 28 Nov 2026). Fit
+                        // Width stays one tap away in the bottom bar for
+                        // anyone who wants the page large and scrolling.
                         LaunchedEffect(vpSize, current, dims[current], zoomMode) {
                             val d = dims[current]
                             if (d != null && d.first > 0f && d.second > 0f &&
@@ -1871,9 +1876,8 @@ fun PdfEditorScreen(state: AppState) {
                         OutlinedButton(onClick = { if (current < pages.size - 1) { current++; selectedId = null; if (previews[current] == null) renderCurrent() } },
                             enabled = current < pages.size - 1) { Text("Next ›", fontSize = 12.5.sp) }
                         Spacer(Modifier.weight(1f))
-                        if (!wide) {
-                            TextButton(onClick = { propsOpen = !propsOpen }) { Text("Properties", fontSize = 12.5.sp) }
-                        }
+                        TextButton(onClick = { railOpen = !railOpen }) { Text("Pages", fontSize = 12.5.sp, fontWeight = if (railOpen) FontWeight.Bold else FontWeight.Normal) }
+                        TextButton(onClick = { propsOpen = !propsOpen }) { Text("Properties", fontSize = 12.5.sp, fontWeight = if (propsOpen) FontWeight.Bold else FontWeight.Normal) }
                         TextButton(onClick = { zoomMode = "manual"; zoom = max(0.1f, zoom - 0.1f) }) { Text("−", fontSize = 16.sp) }
                         Text("${(zoom * 100).toInt()}%", fontSize = 12.5.sp, color = NavyText)
                         TextButton(onClick = { zoomMode = "manual"; zoom = min(4f, zoom + 0.1f) }) { Text("+", fontSize = 16.sp) }
@@ -1882,7 +1886,13 @@ fun PdfEditorScreen(state: AppState) {
                         TextButton(onClick = { zoomMode = "page" }) { Text("Fit Page", fontSize = 12.5.sp, fontWeight = if (zoomMode == "page") FontWeight.Bold else FontWeight.Normal) }
                     }
                 }
-                    if (wide) {
+                    // Properties is ON DEMAND on wide screens too (Ayan,
+                    // 28 Nov 2026: "sab upar rakho, baju me nahi" — the
+                    // permanent 300 dp panel squeezed the page). It opens
+                    // when an object is selected or via the bottom-bar
+                    // "Properties" toggle, and the page reclaims the
+                    // width the moment it closes.
+                    if (wide && propsOpen) {
                         Spacer(Modifier.width(12.dp))
                         WhiteCard(Modifier.width(300.dp).fillMaxHeight()) { propsPanel() }
                     }
