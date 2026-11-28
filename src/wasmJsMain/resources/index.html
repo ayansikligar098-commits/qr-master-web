@@ -350,7 +350,7 @@
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
     }
-    // paragraphs: [{ runs: [{ text, bold, sizePt }] }] or { pageBreak: true }
+    // paragraphs: [{ runs: [{ text, sizePt }] }] or { pageBreak: true }
     function qmBuildDocx(paragraphs) {
         var enc = new TextEncoder();
         var body = '';
@@ -360,7 +360,6 @@
             body += '<w:p>';
             p.runs.forEach(function (r) {
                 var props = '';
-                if (r.bold) props += '<w:b/>';
                 if (r.sizePt) props += '<w:sz w:val="' + Math.round(r.sizePt * 2) + '"/>';
                 body += '<w:r>' + (props ? '<w:rPr>' + props + '</w:rPr>' : '') +
                     '<w:t xml:space="preserve">' + qmXmlEsc(r.text) + '</w:t></w:r>';
@@ -556,9 +555,11 @@
                     // build a real .docx (a ZIP of Word XML, written here
                     // from scratch — stored entries, no compression, no
                     // library). Lines are grouped into paragraphs by their
-                    // vertical gap; bold is kept when the font name says so.
-                    // Layout, images and tables are NOT preserved — the
-                    // text comes out as clean editable paragraphs.
+                    // vertical gap; font sizes are kept. Layout, images,
+                    // tables and bold are NOT preserved — pdf.js reports
+                    // only opaque font ids, so bold cannot be detected
+                    // reliably; the text comes out as clean editable
+                    // paragraphs.
                     if (typeof pdfjsLib === 'undefined') throw new Error('PDF viewer library is still loading. Try again in a moment.');
                     var wpdf = await qmGetJsDoc(args.pdf);
                     var wparas = [], wtotal = 0;
@@ -571,8 +572,7 @@
                             var tr = it.transform || [0, 0, 0, 0, 0, 0];
                             witems.push({
                                 str: it.str, x: tr[4] || 0, y: tr[5] || 0,
-                                size: Math.min(30, Math.max(8, Math.abs(tr[3]) || 11)),
-                                bold: (it.fontName || '').toLowerCase().indexOf('bold') >= 0
+                                size: Math.min(30, Math.max(8, Math.abs(tr[3]) || 11))
                             });
                         });
                         var wlines = [];
@@ -597,9 +597,8 @@
                             });
                             var gap = (prevY === null) ? 0 : (prevY - ln.y);
                             if (cur === null || gap > prevH * 1.8) { cur = { runs: [] }; wparas.push(cur); }
-                            if (cur.runs.length) cur.runs.push({ text: ' ', bold: false, sizePt: null });
-                            var wbold = ln.items.some(function (it) { return it.bold; });
-                            cur.runs.push({ text: txt, bold: wbold, sizePt: h });
+                            if (cur.runs.length) cur.runs.push({ text: ' ', sizePt: null });
+                            cur.runs.push({ text: txt, sizePt: h });
                             prevY = ln.y; prevH = h;
                         });
                         if (wp < wpdf.numPages) wparas.push({ pageBreak: true });
