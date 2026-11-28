@@ -22,6 +22,10 @@
     <meta name="twitter:title" content="Kitnook — Free QR Code Generator, PDF Tools, Passport Photo & More">
     <meta name="twitter:description" content="Kitnook — Everything You Need, One Nook. Free QR code generator, PDF converter & editor, passport photo maker, calculators and Spin & Earn — all your tools in one place.">
     <link type="text/css" rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="https://bauval.org">
+    <link rel="preload" href="qrmaster.js" as="script">
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
     <style>
@@ -2531,7 +2535,7 @@
         if (window.innerWidth > 760) {
             var s = document.createElement('script');
             s.async = true;
-            s.setAttribute('fetchpriority', 'high');
+            s.setAttribute('fetchpriority', 'low');
             s.setAttribute('data-cfasync', 'false');
             s.src = 'https://bauval.org/21/41e28eacebd3378a2157a63e3165516d';
             document.getElementById('qm-native-card').appendChild(s);
