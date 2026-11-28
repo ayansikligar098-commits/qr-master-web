@@ -60,6 +60,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import qrmaster.web.data.FileShareApi
 import qrmaster.web.data.FirebaseApi
 import qrmaster.web.data.fmtBytes
+import qrmaster.web.data.nowMillis
 import qrmaster.web.qr.QrCode
 import qrmaster.web.qr.QrEcc
 
@@ -193,6 +194,12 @@ private fun FileShareContent(state: AppState) {
     var doneDeleteConfirm by remember { mutableStateOf(false) }
 
     var mine by remember { mutableStateOf<List<FileShareApi.MyShare>?>(null) }
+    // The share this browser just uploaded. KV lists are eventually
+    // consistent (a fresh record can take ~a minute to appear in
+    // /api/shares/mine), so the just-finished share is shown from local
+    // state until the server list catches up — otherwise the uploader
+    // sees "No shares yet" right after a successful upload.
+    var localDone by remember { mutableStateOf<FileShareApi.MyShare?>(null) }
     var mineLoading by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<FileShareApi.MyShare?>(null) }
     var qrForId by remember { mutableStateOf<String?>(null) }
@@ -274,7 +281,25 @@ private fun FileShareContent(state: AppState) {
                 status = st
                 if (phase == "uploading") {
                     when (st.state) {
-                        "done" -> { phase = "done"; loadMine() }
+                        "done" -> {
+                            phase = "done"
+                            if (st.shareId.isNotBlank()) {
+                                val nowMs = nowMillis()
+                                localDone = FileShareApi.MyShare(
+                                    id = st.shareId,
+                                    fileName = st.fileName.ifBlank { picked?.name ?: "File" },
+                                    size = st.total,
+                                    createdAt = nowMs,
+                                    expiresAt = st.expiresAt,
+                                    daysLeft = ((st.expiresAt - nowMs) / 86400000L).toInt().coerceAtLeast(0),
+                                    state = "active",
+                                    downloads = 0,
+                                    hasPassword = password.isNotBlank(),
+                                    tier = st.tier
+                                )
+                            }
+                            loadMine()
+                        }
                         "error" -> { phase = "pick"; pickError = friendlyFsError(st) }
                         "cancelled" -> { phase = "pick"; picked = null; resumable = false }
                     }
@@ -466,7 +491,13 @@ private fun FileShareContent(state: AppState) {
                 }
             }
         }
-        val shares = mine
+        val serverShares = mine
+        val shares: List<FileShareApi.MyShare>? = when {
+            serverShares == null -> localDone?.let { listOf(it) }
+            localDone != null && serverShares.none { it.id == localDone!!.id } ->
+                listOf(localDone!!) + serverShares
+            else -> serverShares
+        }
         when {
             shares == null -> Text("Loading your shares…", fontSize = 12.5.sp, color = MutedText)
             shares.isEmpty() -> Text(
@@ -557,6 +588,7 @@ private fun FileShareContent(state: AppState) {
                         val ok = FileShareApi.deleteShare(id, fsSavedToken(id).ifBlank { null })
                         if (ok) {
                             state.toast("File deleted")
+                            if (localDone?.id == id) localDone = null
                             picked = null; password = ""; phase = "pick"
                             loadMine()
                         } else state.toast("Could not delete. Please try again.")
@@ -583,6 +615,7 @@ private fun FileShareContent(state: AppState) {
                         if (ok) {
                             state.toast("Share deleted")
                             mine = mine?.filter { it.id != target.id }
+                            if (localDone?.id == target.id) localDone = null
                         } else state.toast("Could not delete. Please try again.")
                     }
                 }) { Text("Delete", color = Color(0xFFC62F3B), fontWeight = FontWeight.Bold) }
